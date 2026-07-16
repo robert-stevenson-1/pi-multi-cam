@@ -1,6 +1,8 @@
 from picamera2 import Picamera2
+from libcamera import controls
 import cv2
 import numpy as np
+import time
 
 # "continuous" or "interval" (triggers focus every 5s)
 AF_MODE = "continuous"
