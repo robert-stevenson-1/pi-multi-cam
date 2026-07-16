@@ -19,7 +19,7 @@ for i in range(2):
             cam.set_controls({"AfMode": controls.AfModeEnum.Auto})
         cam.start()
         cameras.append(cam)
-        print(f"Camera {i} connected.")
+        print(f"Camera {i} connected. Resolution: {cam.stream_configuration()['size']}")
     except Exception as e:
         print(f"Camera {i} not connected: {e}")
 
