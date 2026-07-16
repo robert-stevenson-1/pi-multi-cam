@@ -2,6 +2,9 @@ from picamera2 import Picamera2
 import cv2
 import numpy as np
 
+# "continuous" or "interval" (triggers focus every 5s)
+AF_MODE = "continuous"
+
 cameras = []
 for i in range(2):
     try:
