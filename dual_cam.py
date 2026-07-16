@@ -2,18 +2,28 @@ from picamera2 import Picamera2
 import cv2
 import numpy as np
 
-picam0 = Picamera2(0)
-picam1 = Picamera2(1)
+cameras = []
+for i in range(2):
+    try:
+        cam = Picamera2(i)
+        cam.start()
+        cameras.append(cam)
+        print(f"Camera {i} connected.")
+    except Exception as e:
+        print(f"Camera {i} not connected: {e}")
 
-picam0.start()
-picam1.start()
+if not cameras:
+    print("No cameras found. Exiting.")
+    import sys; sys.exit(1)
 
 while True:
-    raw0 = picam0.capture_array()
-    raw1 = picam1.capture_array()
-    frame0 = cv2.cvtColor(cv2.flip(raw0, -1), cv2.COLOR_RGB2BGR)
-    frame1 = cv2.cvtColor(cv2.flip(raw1, -1), cv2.COLOR_RGB2BGR)
-    combined = np.hstack((frame0, frame1))
+    frames = []
+    for cam in cameras:
+        raw = cam.capture_array()
+        frame = cv2.cvtColor(cv2.flip(raw, -1), cv2.COLOR_RGB2BGR)
+        frames.append(frame)
+
+    combined = np.hstack(frames)
     cv2.imshow("Cameras (c=capture, q=quit)", combined)
 
     key = cv2.waitKey(1) & 0xFF
@@ -22,10 +32,10 @@ while True:
         break
     elif key == ord("c"):
         print("Capturing...")
-        cv2.imwrite("cam0.jpg", frame0)
-        cv2.imwrite("cam1.jpg", frame1)
-        print("Saved cam0.jpg and cam1.jpg")
+        for idx, frame in enumerate(frames):
+            cv2.imwrite(f"cam{idx}.jpg", frame)
+        print(f"Saved cam0.jpg{' and cam1.jpg' if len(frames) > 1 else ''}")
 
 cv2.destroyAllWindows()
-picam0.stop()
-picam1.stop()
+for cam in cameras:
+    cam.stop()
