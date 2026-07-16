@@ -11,6 +11,12 @@ cameras = []
 for i in range(2):
     try:
         cam = Picamera2(i)
+        config = cam.create_still_configuration()
+        cam.configure(config)
+        if AF_MODE == "continuous":
+            cam.set_controls({"AfMode": controls.AfModeEnum.Continuous})
+        else:
+            cam.set_controls({"AfMode": controls.AfModeEnum.Auto})
         cam.start()
         cameras.append(cam)
         print(f"Camera {i} connected.")
