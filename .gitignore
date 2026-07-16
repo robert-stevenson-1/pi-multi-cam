@@ -216,3 +216,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# agent related
+PLAN.md
+plan.md
+agent/*
+agents/*
+
+# Image captures
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.webp
