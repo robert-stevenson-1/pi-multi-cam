@@ -6,9 +6,10 @@ import time
 
 try:
     import gpiod
-    from gpiod.line import Direction, Bias, Value
+    GPIO_ACTIVE = gpiod.line.Value.ACTIVE
 except ImportError:
     gpiod = None
+    GPIO_ACTIVE = 0
     print("gpiod failed to import")
 
 # "continuous" or "interval" (triggers focus every 5s)
@@ -72,8 +73,7 @@ while True:
     frames = []
     for cam in cameras:
         if AF_MODE == "interval":
-            if not hasattr(cam, "_last_af_trigger"):
-                cam._last_af_trigger = 0
+            cam._last_af_trigger = getattr(cam, "_last_af_trigger", 0)
             if time.time() - cam._last_af_trigger >= 5:
                 cam.set_controls({"AfTrigger": controls.AfTriggerEnum.Start})
                 cam._last_af_trigger = time.time()
@@ -93,7 +93,7 @@ while True:
 
     # GPIO trigger check (active low: pin reads 0 when button pressed)
     if gpio_request is not None and time.time() > gpio_debounce_until:
-        if gpio_request.get_value(GPIO_TRIGGER_PIN) == Value.ACTIVE:
+        if gpio_request.get_value(GPIO_TRIGGER_PIN) == GPIO_ACTIVE:
             capture_frames(frames)
             gpio_debounce_until = time.time() + 0.5
 
