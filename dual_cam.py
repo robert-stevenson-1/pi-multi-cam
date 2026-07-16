@@ -30,6 +30,12 @@ if not cameras:
 while True:
     frames = []
     for cam in cameras:
+        if AF_MODE == "interval":
+            if not hasattr(cam, "_last_af_trigger"):
+                cam._last_af_trigger = 0
+            if time.time() - cam._last_af_trigger >= 5:
+                cam.set_controls({"AfTrigger": controls.AfTriggerEnum.Start})
+                cam._last_af_trigger = time.time()
         raw = cam.capture_array()
         frame = cv2.cvtColor(cv2.flip(raw, -1), cv2.COLOR_RGB2BGR)
         frames.append(frame)
