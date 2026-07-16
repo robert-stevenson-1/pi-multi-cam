@@ -4,8 +4,18 @@ import cv2
 import numpy as np
 import time
 
+try:
+    import gpiod
+    from gpiod.line import Direction, Bias, Value
+except ImportError:
+    gpiod = None
+    print("gpiod failed to import")
+
 # "continuous" or "interval" (triggers focus every 5s)
 AF_MODE = "continuous"
+
+# GPIO pin for hardware capture trigger (-1 = disabled, BCM numbering)
+GPIO_TRIGGER_PIN = 19
 
 cameras = []
 for i in range(2):
@@ -26,6 +36,37 @@ for i in range(2):
 if not cameras:
     print("No cameras found. Exiting.")
     import sys; sys.exit(1)
+
+# --- GPIO trigger setup ---
+gpio_request = None
+if GPIO_TRIGGER_PIN >= 0:
+    if gpiod is None:
+        print("WARNING: gpiod not installed. GPIO trigger disabled.")
+    else:
+        try:
+            settings = gpiod.LineSettings(
+                direction=gpiod.line.Direction.INPUT,
+                bias=gpiod.line.Bias.PULL_UP,
+                active_low=True
+            )
+            gpio_request = gpiod.request_lines(
+                "/dev/gpiochip0",
+                consumer="dual-cam-trigger",
+                config={GPIO_TRIGGER_PIN: settings},
+            )
+            print(f"GPIO trigger enabled on pin {GPIO_TRIGGER_PIN}")
+        except Exception as e:
+            print(f"WARNING: GPIO trigger failed: {e}")
+            gpio_request = None
+
+def capture_frames(frames):
+    """Save current frames to disk."""
+    print("Capturing...")
+    for idx, frame in enumerate(frames):
+        cv2.imwrite(f"cam{idx}.jpg", frame)
+    print(f"Saved cam0.jpg{' and cam1.jpg' if len(frames) > 1 else ''}")
+
+gpio_debounce_until = 0
 
 while True:
     frames = []
@@ -48,11 +89,16 @@ while True:
         print("Quitting.")
         break
     elif key == ord("c"):
-        print("Capturing...")
-        for idx, frame in enumerate(frames):
-            cv2.imwrite(f"cam{idx}.jpg", frame)
-        print(f"Saved cam0.jpg{' and cam1.jpg' if len(frames) > 1 else ''}")
+        capture_frames(frames)
 
+    # GPIO trigger check (active low: pin reads 0 when button pressed)
+    if gpio_request is not None and time.time() > gpio_debounce_until:
+        if gpio_request.get_value(GPIO_TRIGGER_PIN) == Value.ACTIVE:
+            capture_frames(frames)
+            gpio_debounce_until = time.time() + 0.5
+
+if gpio_request is not None:
+    gpio_request.release()
 cv2.destroyAllWindows()
 for cam in cameras:
     cam.stop()
