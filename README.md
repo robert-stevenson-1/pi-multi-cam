@@ -34,6 +34,13 @@ python3 cam_server.py
 
 No display needed on any Pi. Foreground processes — use tmux/systemd to background them.
 
+**Launch scripts** (start/stop/status/restart/toggle; toggle on bare invocation):
+
+```bash
+./launch_primary.sh        # primary: cam_server + web_gallery
+./launch_secondary.sh      # each secondary: cam_server
+```
+
 ### Triggers
 
 - **GPIO button**: all Pis fire at once.

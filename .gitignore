@@ -223,6 +223,9 @@ plan.md
 agent/*
 agents/*
 
+# Launch script state (PID files + logs)
+.run/
+
 # Image captures
 *.jpg
 *.jpeg

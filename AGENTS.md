@@ -29,7 +29,7 @@ python3 cam_server.py        # edit MODE / PI_ID / PRIMARY_HOST per Pi first
 python3 web_gallery.py       # primary only; http://<primary-ip>:8088
 ```
 
-No display needed on any Pi. Foreground process — use tmux/systemd to background it.
+No display needed on any Pi. Foreground process — use tmux/systemd to background it. Alternatively `./launch_primary.sh` (cam_server + web_gallery) and `./launch_secondary.sh` (cam_server) — start/stop/status/restart, toggle on bare invocation; PID files + logs in `.run/` (gitignored).
 
 ## Config knobs (`cam_server.py`)
 
