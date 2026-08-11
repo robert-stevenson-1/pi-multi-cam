@@ -21,15 +21,30 @@ except ImportError:
     GPIO_ACTIVE = 0
     print("gpiod failed to import")
 
-MODE = "p"
-PI_ID = "pi1"
-PRIMARY_HOST = "192.168.1.100"
-PRIMARY_PORT = 8080
-SECONDARY_PORT = 8081
-AF_MODE = "continuous"
-GPIO_TRIGGER_PIN = 19
-MAX_SECONDARIES = 3
-CAPTURES_DIR = "captures"
+
+def load_env(path=".env"):
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+load_env()
+
+MODE = os.getenv("MODE", "p")
+PI_ID = os.getenv("PI_ID", "pi1")
+PRIMARY_HOST = os.getenv("PRIMARY_HOST", "192.168.1.100")
+PRIMARY_PORT = int(os.getenv("PRIMARY_PORT", "8080"))
+SECONDARY_PORT = int(os.getenv("SECONDARY_PORT", "8081"))
+AF_MODE = os.getenv("AF_MODE", "continuous")
+GPIO_TRIGGER_PIN = int(os.getenv("GPIO_TRIGGER_PIN", "19"))
+MAX_SECONDARIES = int(os.getenv("MAX_SECONDARIES", "3"))
+CAPTURES_DIR = os.getenv("CAPTURES_DIR", "captures")
 
 MODE = MODE.strip().lower()
 if MODE in ("p", "primary"):

@@ -4,10 +4,25 @@ import urllib.parse
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = 8088
-CAPTURES_DIR = "captures"
-PRIMARY_HOST = "127.0.0.1"
-PRIMARY_PORT = 8080
+
+def load_env(path=".env"):
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+load_env()
+
+PORT = int(os.getenv("PORT", "8088"))
+CAPTURES_DIR = os.getenv("CAPTURES_DIR", "captures")
+PRIMARY_HOST = os.getenv("PRIMARY_HOST", "127.0.0.1")
+PRIMARY_PORT = int(os.getenv("PRIMARY_PORT", "8080"))
 
 
 def gallery_html(folders):

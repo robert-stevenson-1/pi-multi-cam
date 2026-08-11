@@ -22,11 +22,11 @@ A shared **active-low** button is wired to every Pi's `GPIO_TRIGGER_PIN` (pull-u
 **Primary:**
 
 ```bash
-python3 cam_server.py        # MODE = "p", PI_ID = "pi1"
+python3 cam_server.py
 python3 web_gallery.py       # http://<primary-ip>:8088
 ```
 
-**Each secondary** (edit `MODE = "s"`, `PI_ID`, `PRIMARY_HOST`):
+**Each secondary** (`.env` with `MODE = "s"`, unique `PI_ID`, `PRIMARY_HOST` set):
 
 ```bash
 python3 cam_server.py
@@ -67,12 +67,21 @@ GPIO_PIN (e.g., BCM 19) ───[button]── GND
 
 Active low — button shorts pin to GND when pressed. No external resistor needed; internal pull-up is configured in software. Set `GPIO_TRIGGER_PIN = -1` to disable.
 
-## Configuration (`cam_server.py`)
+## Configuration (`.env`, not committed)
+
+Copy `.env.example` to `.env` on each Pi and edit per device — no code edits needed, so `git pull` won't conflict:
+
+```bash
+cp .env.example .env
+nano .env
+```
 
 - `MODE`: `"p"` or `"s"` (`"primary"`/`"secondary"` also accepted).
 - `PI_ID`: unique per Pi; embedded in every filename.
-- `PRIMARY_HOST`: IP of primary (secondary only).
+- `PRIMARY_HOST`: primary's IP. On the primary set it to `127.0.0.1` (it also drives web_gallery's proxy target); on secondaries it's the primary's IP.
 - `PRIMARY_PORT` / `SECONDARY_PORT`: HTTP ports (primary / secondary servers).
 - `MAX_SECONDARIES`: cap on registration, default 3.
 - `AF_MODE`: `"continuous"` vs `"interval"` (manual AF trigger every 5s).
 - `GPIO_TRIGGER_PIN`: BCM pin, `-1` disables; active-low, 0.5s software debounce.
+- `CAPTURES_DIR`: output directory.
+- `PORT`: web_gallery port.

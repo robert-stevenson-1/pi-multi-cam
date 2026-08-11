@@ -25,21 +25,24 @@ Folder hash = first 4 hex chars of `sha256("<YYYYMMDD_HHMMSS>_<floor(time*5)>")`
 ## Run
 
 ```bash
-python3 cam_server.py        # edit MODE / PI_ID / PRIMARY_HOST per Pi first
+python3 cam_server.py        # copy .env.example to .env and edit per Pi first
 python3 web_gallery.py       # primary only; http://<primary-ip>:8088
 ```
 
 No display needed on any Pi. Foreground process — use tmux/systemd to background it. Alternatively `./launch_primary.sh` (cam_server + web_gallery) and `./launch_secondary.sh` (cam_server) — start/stop/status/restart, toggle on bare invocation; PID files + logs in `.run/` (gitignored).
 
-## Config knobs (`cam_server.py`)
+## Config (`.env`, gitignored)
+
+Config is read from `.env` (loaded by both scripts at startup, fallback to in-code defaults; real env vars take precedence). Copy `.env.example` to `.env` on each Pi and edit per device — this avoids merge conflicts from per-Pi edits.
 
 - `MODE`: `"p"` or `"s"` (`"primary"`/`"secondary"` also accepted).
 - `PI_ID`: unique per Pi; embedded in every filename.
-- `PRIMARY_HOST`: IP of primary (secondary only).
-- `PRIMARY_PORT` / `SECONDARY_PORT`: HTTP ports (primary / secondary servers).
+- `PRIMARY_HOST`: IP of primary. On the primary set it to its own IP/127.0.0.1 — it also drives web_gallery's proxy target; on secondaries it's the primary's IP.
+- `PRIMARY_PORT` / `SECONDARY_PORT`: HTTP ports (primary / secondary servers). `PORT`: web_gallery port.
 - `MAX_SECONDARIES`: cap on `POST /register`, default 3.
 - `AF_MODE`: `"continuous"` vs `"interval"` (manual AF trigger every 5s via private `_last_af_trigger` attr).
 - `GPIO_TRIGGER_PIN`: BCM pin, `-1` disables; active-low, 0.5s software debounce.
+- `CAPTURES_DIR`: output directory.
 
 `web_gallery.py` knobs: `PORT`, `CAPTURES_DIR`, `PRIMARY_HOST`/`PRIMARY_PORT` (proxy target for the capture button; defaults to `127.0.0.1:8080`).
 
