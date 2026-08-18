@@ -43,16 +43,19 @@ def jpeg_size(path):
     return None
 
 
-def gallery_html(folders):
+def gallery_html(sections):
     cards = []
-    for name, entries in folders:
-        thumbs = "".join(
-            f'<figure><a href="{name}/{img}" data-pswp-width="{w}" data-pswp-height="{h}">'
-            f'<img src="{name}/{thumb or img}" loading="lazy"></a>'
-            f'<figcaption>{img}</figcaption></figure>'
-            for img, thumb, w, h in entries
-        )
-        cards.append(f'<div class="card"><h2>{name}</h2><div class="grid">{thumbs}</div></div>')
+    for title, cardlist in sections:
+        if title:
+            cards.append(f'<h2 class="sess">{title}</h2>')
+        for name, entries in cardlist:
+            thumbs = "".join(
+                f'<figure><a href="{name}/{img}" data-pswp-width="{w}" data-pswp-height="{h}">'
+                f'<img src="{name}/{thumb or img}" loading="lazy"></a>'
+                f'<figcaption>{img}</figcaption></figure>'
+                for img, thumb, w, h in entries
+            )
+            cards.append(f'<div class="card"><h3>{name}</h3><div class="grid">{thumbs}</div></div>')
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Capture Gallery</title>
 <link rel="stylesheet" href="/static/photoswipe/photoswipe.css">
@@ -62,15 +65,24 @@ body{{font-family:system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding
 figure{{margin:0}}
 img{{width:100%;height:auto;display:block;border-radius:6px}}
 .card{{margin-bottom:2rem;border-top:2px solid #ddd;padding-top:1rem}}
+.sess{{color:#555;text-transform:uppercase;font-size:.9rem;letter-spacing:.05em;margin:1.5rem 0 .25rem}}
 button{{font-size:1.1rem;padding:.6rem 1.4rem;cursor:pointer}}
+input{{font-size:1.1rem;padding:.6rem .8rem}}
 #status{{margin-left:1rem;color:#666}}
 #syncstatus{{margin-left:1rem;color:#666}}
+#sessstatus{{margin-left:1rem;color:#666}}
 </style></head>
 <body>
 <h1>Capture Gallery</h1>
 <button onclick="capture()">Capture All</button><span id="status"></span>
 <button onclick="syncNow()">Sync now</button><span id="syncstatus"></span>
 <button id="purgebtn" onclick="purge()">Purge secondaries</button>
+<div id="sesspanel">
+  <input id="sessname" placeholder="session name">
+  <button onclick="startSession()">Start session</button>
+  <button onclick="stopSession()">Stop session</button>
+  <span id="sessstatus"></span>
+</div>
 {''.join(cards)}
 <script>
 function capture() {{
@@ -120,6 +132,24 @@ function purge() {{
     }})
     .catch(e => {{ s.textContent = 'Error: ' + e; b.textContent = 'Purge secondaries'; purgeArmed = false; }});
 }}
+function startSession() {{
+  const s = document.getElementById('sessstatus');
+  const name = document.getElementById('sessname').value.trim();
+  if (!name) {{ s.textContent = 'Enter a session name.'; return; }}
+  s.textContent = 'Starting...';
+  fetch('/session/start?name=' + encodeURIComponent(name), {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => {{ s.textContent = d.ok ? 'Active: ' + d.session : 'Failed: ' + (d.error||''); setTimeout(()=>location.reload(), 800); }})
+    .catch(e => {{ s.textContent = 'Error: ' + e; }});
+}}
+function stopSession() {{
+  const s = document.getElementById('sessstatus');
+  s.textContent = 'Stopping...';
+  fetch('/session/stop', {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => {{ s.textContent = d.ok ? 'Stopped.' : 'Failed: ' + (d.error||''); setTimeout(()=>location.reload(), 800); }})
+    .catch(e => {{ s.textContent = 'Error: ' + e; }});
+}}
 </script>
 <script type="module">
 import PhotoSwipeLightbox from '/static/photoswipe/photoswipe-lightbox.esm.js';
@@ -150,35 +180,31 @@ class Handler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
-        if self.path == "/capture":
-            url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/remote-capture"
-            try:
-                req = urllib.request.Request(url, data=b"", method="POST")
-                resp = urllib.request.urlopen(req, timeout=10)
-                body = json.loads(resp.read().decode())
-                self._send_json(200, {"ok": True, "primary": body})
-            except Exception as e:
-                self._send_json(500, {"ok": False, "error": str(e)})
-        elif self.path == "/sync":
-            url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/sync"
-            try:
-                req = urllib.request.Request(url, data=b"", method="POST")
-                resp = urllib.request.urlopen(req, timeout=90)
-                body = json.loads(resp.read().decode())
-                self._send_json(200, {"ok": True, "secondaries": body.get("secondaries", {})})
-            except Exception as e:
-                self._send_json(500, {"ok": False, "error": str(e)})
-        elif self.path == "/purge-secondaries":
-            url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/purge-secondaries"
-            try:
-                req = urllib.request.Request(url, data=b"", method="POST")
-                resp = urllib.request.urlopen(req, timeout=60)
-                body = json.loads(resp.read().decode())
-                self._send_json(200, {"ok": True, "secondaries": body.get("secondaries", {})})
-            except Exception as e:
-                self._send_json(500, {"ok": False, "error": str(e)})
+        path = urllib.parse.urlparse(self.path).path
+        qs = urllib.parse.urlparse(self.path).query
+        if path == "/capture":
+            body = self._proxy("/remote-capture", timeout=10)
+            self._send_json(200, {"ok": body.get("ok", False), "primary": body})
+        elif path == "/sync":
+            body = self._proxy("/sync", timeout=90)
+            self._send_json(200, {"ok": body.get("ok", False), "secondaries": body.get("secondaries", {})})
+        elif path == "/purge-secondaries":
+            body = self._proxy("/purge-secondaries", timeout=60)
+            self._send_json(200, {"ok": body.get("ok", False), "secondaries": body.get("secondaries", {})})
+        elif path in ("/session/start", "/session/stop"):
+            body = self._proxy(path + (f"?{qs}" if qs else ""), timeout=10)
+            self._send_json(200, body)
         else:
             self._send_json(404, {"ok": False, "error": "not found"})
+
+    def _proxy(self, path, timeout=10):
+        url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}{path}"
+        try:
+            req = urllib.request.Request(url, data=b"", method="POST")
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            return json.loads(resp.read().decode())
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def _send_json(self, code, obj):
         body = json.dumps(obj).encode()
@@ -189,7 +215,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_gallery(self):
-        folders = []
+        by_name = {}
         if os.path.isdir(CAPTURES_DIR):
             for name in sorted(os.listdir(CAPTURES_DIR), reverse=True):
                 path = os.path.join(CAPTURES_DIR, name)
@@ -204,8 +230,22 @@ class Handler(SimpleHTTPRequestHandler):
                         size = jpeg_size(os.path.join(path, f))
                         w, h = size if size else (1920, 1080)
                         entries.append((f, thumb, w, h))
-                    folders.append((name, entries))
-        body = gallery_html(folders).encode()
+                    if entries:
+                        by_name[name] = entries
+        sessions = []
+        try:
+            with open(os.path.join(CAPTURES_DIR, "sessions.json")) as f:
+                sessions = json.load(f)
+        except Exception:
+            sessions = []
+        sections = []
+        for s in sessions:
+            cards = [(b, by_name.pop(b, [])) for b in s.get("batches", []) if b in by_name]
+            if cards:
+                sections.append((s["name"], cards))
+        if by_name:
+            sections.append(("Ungrouped", [(n, e) for n, e in by_name.items()]))
+        body = gallery_html(sections).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

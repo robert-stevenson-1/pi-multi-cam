@@ -138,10 +138,62 @@ class Primary:
         self.lock = threading.Lock()
         self.secondaries = {}
         self.current_batch = None
+        self.session_path = os.path.join(CAPTURES_DIR, "sessions.json")
+        self.sessions = []
+        self.current_session = None
+        self._load_sessions()
+
+    def _load_sessions(self):
+        try:
+            with open(self.session_path) as f:
+                self.sessions = json.load(f)
+        except Exception:
+            self.sessions = []
+        for s in self.sessions:
+            if s.get("active"):
+                self.current_session = s["name"]
+
+    def _save_sessions(self):
+        with open(self.session_path, "w") as f:
+            json.dump(self.sessions, f, indent=1)
+
+    def session_start(self, name):
+        name = name.strip()
+        if not name or not all(c.isalnum() or c in "_- " for c in name):
+            return {"ok": False, "error": "invalid session name"}
+        with self.lock:
+            if self.current_session:
+                return {"ok": False, "error": f"session '{self.current_session}' already active"}
+            self.current_session = name
+            self.sessions.append({"name": name, "created": time.time(), "active": True, "batches": []})
+            self._save_sessions()
+            return {"ok": True, "session": name}
+
+    def session_stop(self):
+        with self.lock:
+            if not self.current_session:
+                return {"ok": False, "error": "no active session"}
+            for s in self.sessions:
+                if s["name"] == self.current_session:
+                    s["active"] = False
+            self.current_session = None
+            self._save_sessions()
+            return {"ok": True}
+
+    def session_status(self):
+        with self.lock:
+            return {"ok": True, "active": self.current_session, "sessions": self.sessions}
 
     def new_batch(self):
-        batch = os.path.join(CAPTURES_DIR, batch_stamp())
+        name = batch_stamp()
+        batch = os.path.join(CAPTURES_DIR, name)
         os.makedirs(batch, exist_ok=True)
+        if self.current_session:
+            for s in self.sessions:
+                if s["name"] == self.current_session:
+                    s["batches"].append(name)
+                    break
+            self._save_sessions()
         return batch
 
     def do_capture(self, remote=False):
@@ -383,6 +435,11 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/purge-secondaries":
                 results = primary.purge_secondaries()
                 self._send_json(200, {"ok": True, "secondaries": results})
+            elif parsed.path == "/session/start":
+                name = qs.get("name", [""])[0]
+                self._send_json(200, primary.session_start(name))
+            elif parsed.path == "/session/stop":
+                self._send_json(200, primary.session_stop())
             else:
                 self._send_json(404, {"error": "not found"})
         else:
@@ -396,8 +453,8 @@ def main():
     global primary
     primary = None
     if PRIMARY:
-        primary = Primary()
         os.makedirs(CAPTURES_DIR, exist_ok=True)
+        primary = Primary()
         server = ThreadingHTTPServer(("", PRIMARY_PORT), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         print(f"Primary mode ({PI_ID}). HTTP on :{PRIMARY_PORT}")
