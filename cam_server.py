@@ -117,6 +117,14 @@ def jpeg_bytes(frame):
     return buf.tobytes() if ok else b""
 
 
+def batch_stamp():
+    now = time.time()
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(now))
+    bucket = int(now * 5)
+    h = hashlib.sha256(f"{stamp}_{bucket}".encode()).hexdigest()[:4]
+    return f"{stamp}_{h}"
+
+
 class Primary:
     def __init__(self):
         self.lock = threading.Lock()
@@ -124,11 +132,7 @@ class Primary:
         self.current_batch = None
 
     def new_batch(self):
-        now = time.time()
-        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(now))
-        bucket = int(now * 5)
-        h = hashlib.sha256(f"{stamp}_{bucket}".encode()).hexdigest()[:4]
-        batch = os.path.join(CAPTURES_DIR, f"{stamp}_{h}")
+        batch = os.path.join(CAPTURES_DIR, batch_stamp())
         os.makedirs(batch, exist_ok=True)
         return batch
 
@@ -142,47 +146,56 @@ class Primary:
                 cv2.imwrite(os.path.join(batch, f"{PI_ID}_cam{idx}.jpg"), frame)
             print(f"Captured {len(frames)} local frame(s) in {os.path.basename(batch)}")
         if remote:
-            self.fire_secondaries()
+            self.fire_secondaries(os.path.basename(batch))
 
-    def fire_secondaries(self):
+    def fire_secondaries(self, batch):
         threads = []
         for pi_id, (ip, port) in list(self.secondaries.items()):
-            t = threading.Thread(target=self._trigger, args=(pi_id, ip, port), daemon=True)
+            t = threading.Thread(target=self._trigger, args=(pi_id, ip, port, batch), daemon=True)
             t.start()
             threads.append(t)
         for t in threads:
             t.join(timeout=3)
 
-    def _trigger(self, pi_id, ip, port):
-        url = f"http://{ip}:{port}/capture"
+    def _trigger(self, pi_id, ip, port, batch):
+        url = f"http://{ip}:{port}/capture?batch={batch}"
         try:
             urllib.request.urlopen(url, timeout=3)
         except Exception as e:
             print(f"WARNING: secondary {pi_id} trigger failed: {e}")
 
-    def handle_upload(self, pi_id, cam_idx, data):
+    def handle_upload(self, pi_id, cam_idx, data, batch=None):
         with self.lock:
-            if self.current_batch is None:
+            if batch:
+                batch_dir = os.path.join(CAPTURES_DIR, batch)
+                os.makedirs(batch_dir, exist_ok=True)
+            elif self.current_batch is None:
                 self.current_batch = self.new_batch()
                 print("No active batch; created from secondary upload")
-            batch = self.current_batch
-        path = os.path.join(batch, f"{pi_id}_cam{cam_idx}.jpg")
+            path = os.path.join(batch_dir if batch else self.current_batch, f"{pi_id}_cam{cam_idx}.jpg")
         with open(path, "wb") as f:
             f.write(data)
         print(f"Saved {pi_id}_cam{cam_idx}.jpg")
 
 
-def secondary_capture():
+def secondary_capture(batch=None):
     with capture_lock:
         frames = grab_frames()
         if not frames:
             print(f"{PI_ID}: no frames captured")
             return
+        if not batch:
+            batch = batch_stamp()
+        local_dir = os.path.join(CAPTURES_DIR, batch)
+        os.makedirs(local_dir, exist_ok=True)
         for idx, frame in enumerate(frames):
             data = jpeg_bytes(frame)
             if not data:
                 continue
-            qs = urllib.parse.urlencode({"pi_id": PI_ID, "cam_idx": idx})
+            fname = f"{PI_ID}_cam{idx}.jpg"
+            with open(os.path.join(local_dir, fname), "wb") as f:
+                f.write(data)
+            qs = urllib.parse.urlencode({"pi_id": PI_ID, "cam_idx": idx, "batch": batch})
             url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/upload?{qs}"
             req = urllib.request.Request(
                 url, data=data, headers={"Content-Type": "image/jpeg"}, method="POST"
@@ -191,7 +204,7 @@ def secondary_capture():
                 urllib.request.urlopen(req, timeout=5)
             except Exception as e:
                 print(f"WARNING: upload cam{idx} failed: {e}")
-        print(f"{PI_ID}: uploaded {len(frames)} frame(s)")
+        print(f"{PI_ID}: saved {len(frames)} frame(s) to {batch}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -212,7 +225,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urllib.parse.urlparse(self.path).path
         if path == "/capture":
-            threading.Thread(target=secondary_capture, daemon=True).start()
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            batch = qs.get("batch", [None])[0]
+            threading.Thread(target=secondary_capture, args=(batch,), daemon=True).start()
             self._send_json(200, {"ok": True})
         elif path == "/status":
             self._send_json(200, {"pi_id": PI_ID, "cameras": len(cameras)})
@@ -242,7 +257,11 @@ class Handler(BaseHTTPRequestHandler):
                 data = self.rfile.read(length) if length else b""
                 pi_id = qs.get("pi_id", ["?"])[0]
                 cam_idx = int(qs.get("cam_idx", ["0"])[0])
-                primary.handle_upload(pi_id, cam_idx, data)
+                batch = qs.get("batch", [None])[0]
+                if batch and not all(c.isalnum() or c == "_" for c in batch):
+                    self._send_json(400, {"error": "invalid batch"})
+                    return
+                primary.handle_upload(pi_id, cam_idx, data, batch)
                 self._send_json(200, {"ok": True})
             elif parsed.path == "/remote-capture":
                 primary.do_capture(remote=True)
