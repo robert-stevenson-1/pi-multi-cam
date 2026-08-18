@@ -49,6 +49,7 @@ button{{font-size:1.1rem;padding:.6rem 1.4rem;cursor:pointer}}
 <h1>Capture Gallery</h1>
 <button onclick="capture()">Capture All</button><span id="status"></span>
 <button onclick="syncNow()">Sync now</button><span id="syncstatus"></span>
+<button id="purgebtn" onclick="purge()">Purge secondaries</button>
 {''.join(cards)}
 <script>
 function capture() {{
@@ -72,6 +73,31 @@ function syncNow() {{
       setTimeout(()=>location.reload(), 1200);
     }})
     .catch(e => {{ s.textContent = 'Error: ' + e; }});
+}}
+let purgeArmed = false;
+function purge() {{
+  const b = document.getElementById('purgebtn');
+  const s = document.getElementById('syncstatus');
+  if (!purgeArmed) {{
+    purgeArmed = true;
+    b.textContent = 'Really delete? Click again';
+    setTimeout(() => {{ purgeArmed = false; b.textContent = 'Purge secondaries'; }}, 5000);
+    return;
+  }}
+  b.textContent = 'Purging...';
+  fetch('/purge-secondaries', {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (!d.ok) {{ s.textContent = 'Failed: ' + (d.error||''); }}
+      else {{
+        const parts = Object.entries(d.secondaries).map(([k,v]) =>
+          v.error ? k+': error '+v.error : k+': deleted '+v.deleted);
+        s.textContent = parts.length ? 'Purged — ' + parts.join(' | ') : 'No secondaries registered.';
+      }}
+      b.textContent = 'Purge secondaries';
+      purgeArmed = false;
+    }})
+    .catch(e => {{ s.textContent = 'Error: ' + e; b.textContent = 'Purge secondaries'; purgeArmed = false; }});
 }}
 </script>
 </body></html>"""
@@ -105,6 +131,15 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 req = urllib.request.Request(url, data=b"", method="POST")
                 resp = urllib.request.urlopen(req, timeout=90)
+                body = json.loads(resp.read().decode())
+                self._send_json(200, {"ok": True, "secondaries": body.get("secondaries", {})})
+            except Exception as e:
+                self._send_json(500, {"ok": False, "error": str(e)})
+        elif self.path == "/purge-secondaries":
+            url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/purge-secondaries"
+            try:
+                req = urllib.request.Request(url, data=b"", method="POST")
+                resp = urllib.request.urlopen(req, timeout=60)
                 body = json.loads(resp.read().decode())
                 self._send_json(200, {"ok": True, "secondaries": body.get("secondaries", {})})
             except Exception as e:

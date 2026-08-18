@@ -194,6 +194,24 @@ class Primary:
             t.join(timeout=65)
         return results
 
+    def purge_secondaries(self):
+        results = {}
+        def purge(pi_id, ip, port):
+            try:
+                req = urllib.request.Request(f"http://{ip}:{port}/purge", data=b"", method="POST")
+                resp = urllib.request.urlopen(req, timeout=30)
+                results[pi_id] = json.loads(resp.read().decode())
+            except Exception as e:
+                results[pi_id] = {"error": str(e)}
+        threads = []
+        for pi_id, (ip, port) in list(self.secondaries.items()):
+            t = threading.Thread(target=purge, args=(pi_id, ip, port), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=35)
+        return results
+
 
 def secondary_capture(batch=None):
     with capture_lock:
@@ -262,6 +280,28 @@ def sync_push():
     return {"pushed": pushed, "failed": failed}
 
 
+def purge_local():
+    deleted = 0
+    if os.path.isdir(CAPTURES_DIR):
+        for name in sorted(os.listdir(CAPTURES_DIR)):
+            batch_dir = os.path.join(CAPTURES_DIR, name)
+            if not os.path.isdir(batch_dir):
+                continue
+            for fname in sorted(os.listdir(batch_dir)):
+                if fname.endswith(".jpg"):
+                    deleted += 1
+                try:
+                    os.remove(os.path.join(batch_dir, fname))
+                except OSError:
+                    pass
+            try:
+                os.rmdir(batch_dir)
+            except OSError:
+                pass
+    print(f"{PI_ID}: purged {deleted} local capture(s)")
+    return {"deleted": deleted}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -326,10 +366,16 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/sync":
                 results = primary.sync_secondaries()
                 self._send_json(200, {"ok": True, "secondaries": results})
+            elif parsed.path == "/purge-secondaries":
+                results = primary.purge_secondaries()
+                self._send_json(200, {"ok": True, "secondaries": results})
             else:
                 self._send_json(404, {"error": "not found"})
         else:
-            self._send_json(404, {"error": "not found"})
+            if parsed.path == "/purge":
+                self._send_json(200, purge_local())
+            else:
+                self._send_json(404, {"error": "not found"})
 
 
 def main():
