@@ -29,8 +29,9 @@ cameras = []
 for i in range(2):
     try:
         cam = Picamera2(i)
-        cam.configure(cam.create_video_configuration(main={"size": SIZE, "format": "RGB888"}))
+        cam.configure(cam.create_still_configuration(main={"size": SIZE, "format": "RGB888"}))
         cam.start()
+        time.sleep(1)
         cameras.append(cam)
         print(f"Camera {i} connected. Streaming {SIZE}")
     except Exception as e:
@@ -44,30 +45,10 @@ capture_lock = threading.Lock()
 
 
 def jpeg_bytes(cam):
-    raw = cam.capture_array()
-    return cv2.imencode(".jpg", cv2.cvtColor(cv2.flip(raw, -1), cv2.COLOR_RGB2BGR))[1].tobytes()
-
-
-def stream_frames(handler, cam_idx):
-    cam = cameras[cam_idx]
-    boundary = "frame"
-    handler.send_response(200)
-    handler.send_header("Content-Type", f"multipart/x-mixed-replace; boundary={boundary}")
-    handler.end_headers()
-    try:
-        while True:
-            with capture_lock:
-                data = jpeg_bytes(cam)
-            handler.wfile.write(b"--" + boundary.encode() + b"\r\n")
-            handler.wfile.write(b"Content-Type: image/jpeg\r\n")
-            handler.wfile.write(f"Content-Length: {len(data)}\r\n\r\n".encode())
-            handler.wfile.write(data)
-            handler.wfile.write(b"\r\n")
-            time.sleep(1 / 12)
-    except (BrokenPipeError, ConnectionResetError, OSError):
-        pass
-    except Exception as e:
-        print(f"stream {cam_idx} error: {e}")
+    with capture_lock:
+        raw = cam.capture_array()
+    ok, buf = cv2.imencode(".jpg", cv2.cvtColor(cv2.flip(raw, -1), cv2.COLOR_RGB2BGR))
+    return buf.tobytes() if ok else b""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,10 +72,23 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path.startswith("/stream/"):
             idx = path[len("/stream/"):]
-            if idx.isdigit() and int(idx) < len(cameras):
-                threading.Thread(target=stream_frames, args=(self, int(idx)), daemon=True).start()
+            if not (idx.isdigit() and int(idx) < len(cameras)):
+                self.send_error(404)
                 return
-            self.send_error(404)
+            cam = cameras[int(idx)]
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+            try:
+                while True:
+                    data = jpeg_bytes(cam)
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n\r\n")
+                    self.wfile.write(data)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+                    time.sleep(1 / 12)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
         else:
             self.send_error(404)
 
