@@ -14,8 +14,8 @@ Synchronized multi-camera capture on Raspberry Pi 5 — one primary + up to 3 se
 A shared **active-low** button is wired to every Pi's `GPIO_TRIGGER_PIN` (pull-up set in software). One press makes all Pis capture simultaneously via hardware — the network is only used *after* capture for secondaries to push frames to the primary.
 
 - **Primary** (`MODE="p"`): capture daemon + HTTP server. Bundles every capture into a timestamped folder.
-- **Secondary** (`MODE="s"`, up to 3): headless capture daemon. Registers with the primary at startup and uploads its frames after each press.
-- **Gallery** (`web_gallery.py`): browser UI on the primary to preview captures and trigger a software capture.
+- **Secondary** (`MODE="s"`, up to 3): headless capture daemon. Registers with the primary at startup, stores every capture locally, then uploads it. Unsynced frames (e.g. primary was down) are pushed later via the gallery's **Sync now**.
+- **Gallery** (`web_gallery.py`): browser UI on the primary — preview (PhotoSwipe lightbox), software capture trigger, sync, secondary purge, sessions, downloads.
 
 ## Usage
 
@@ -47,17 +47,27 @@ No display needed on any Pi. Foreground processes — use tmux/systemd to backgr
 - **Keyboard**: primary accepts `c` (remote capture) and `q` (quit) on stdin.
 - **Web gallery**: "Capture All" button → primary `POST /remote-capture` → fires every registered secondary over HTTP.
 
+### Gallery features
+
+- **Capture All** — software trigger.
+- **Sync now** — every registered secondary pushes its locally stored captures the primary is missing (recovers frames from when the primary was offline). Secondaries keep local copies after upload (marked `.ok`) until **Purge secondaries** wipes them (two-step confirmation in the UI).
+- **Sessions** — start/stop a named session from the gallery; captures taken while a session is active are grouped under it (manifest in `captures/sessions.json`, folder layout unchanged). GPIO and web captures both join the active session.
+- **Lightbox** — click any thumbnail for a fullscreen PhotoSwipe preview (swipe, keyboard, pinch-zoom). Vendored in `static/photoswipe/`, fully offline.
+- **Downloads** — per-image "save", per-batch "download batch", per-session "download" as a ZIP of the full-res frames.
+
 ### Output
 
 ```
 captures/
   20260811_143052_a1b2/
     pi1_cam0.jpg
+    pi1_cam0_thumb.jpg     # 480px grid thumbnail
     pi1_cam1.jpg
     pi2_cam0.jpg
+  sessions.json            # session manifest, primary only
 ```
 
-Folder name = `YYYYMMDD_HHMMSS` + 4-char hash of the 200ms time bucket, so back-to-back presses within the same second still get distinct folders (identical across Pis for one press). Each file is tagged `<pi_id>_cam<idx>.jpg`.
+Folder name = `YYYYMMDD_HHMMSS` + 4-char hash of the 200ms time bucket, so back-to-back presses within the same second still get distinct folders (identical across Pis for one press). Each file is tagged `<pi_id>_cam<idx>.jpg`. Secondaries mirror this layout locally; `.ok` sidecar markers track which frames have been synced to the primary.
 
 ## GPIO Button Wiring
 
