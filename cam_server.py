@@ -177,6 +177,23 @@ class Primary:
             f.write(data)
         print(f"Saved {pi_id}_cam{cam_idx}.jpg")
 
+    def sync_secondaries(self):
+        results = {}
+        def pull(pi_id, ip, port):
+            try:
+                resp = urllib.request.urlopen(f"http://{ip}:{port}/sync", timeout=60)
+                results[pi_id] = json.loads(resp.read().decode())
+            except Exception as e:
+                results[pi_id] = {"error": str(e)}
+        threads = []
+        for pi_id, (ip, port) in list(self.secondaries.items()):
+            t = threading.Thread(target=pull, args=(pi_id, ip, port), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=65)
+        return results
+
 
 def secondary_capture(batch=None):
     with capture_lock:
@@ -202,9 +219,47 @@ def secondary_capture(batch=None):
             )
             try:
                 urllib.request.urlopen(req, timeout=5)
+                with open(os.path.join(local_dir, fname) + ".ok", "w") as f:
+                    f.write("ok")
             except Exception as e:
                 print(f"WARNING: upload cam{idx} failed: {e}")
         print(f"{PI_ID}: saved {len(frames)} frame(s) to {batch}")
+
+
+def sync_push():
+    pushed = 0
+    failed = 0
+    if os.path.isdir(CAPTURES_DIR):
+        for name in sorted(os.listdir(CAPTURES_DIR)):
+            batch_dir = os.path.join(CAPTURES_DIR, name)
+            if not os.path.isdir(batch_dir):
+                continue
+            for fname in sorted(os.listdir(batch_dir)):
+                if not fname.endswith(".jpg") or os.path.exists(os.path.join(batch_dir, fname) + ".ok"):
+                    continue
+                with open(os.path.join(batch_dir, fname), "rb") as f:
+                    data = f.read()
+                stem = fname[:-4]
+                pi_id, cam_idx = PI_ID, 0
+                if "_cam" in stem:
+                    pi, _, idx = stem.rpartition("_cam")
+                    if pi and idx.isdigit():
+                        pi_id, cam_idx = pi, int(idx)
+                qs = urllib.parse.urlencode({"pi_id": pi_id, "cam_idx": cam_idx, "batch": name})
+                url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/upload?{qs}"
+                req = urllib.request.Request(
+                    url, data=data, headers={"Content-Type": "image/jpeg"}, method="POST"
+                )
+                try:
+                    urllib.request.urlopen(req, timeout=10)
+                    with open(os.path.join(batch_dir, fname) + ".ok", "w") as f:
+                        f.write("ok")
+                    pushed += 1
+                except Exception as e:
+                    print(f"WARNING: sync upload {name}/{fname} failed: {e}")
+                    failed += 1
+    print(f"{PI_ID}: sync pushed {pushed}, failed {failed}")
+    return {"pushed": pushed, "failed": failed}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -231,6 +286,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
         elif path == "/status":
             self._send_json(200, {"pi_id": PI_ID, "cameras": len(cameras)})
+        elif path == "/sync":
+            self._send_json(200, sync_push())
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -266,6 +323,9 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/remote-capture":
                 primary.do_capture(remote=True)
                 self._send_json(200, {"ok": True, "batch": os.path.basename(primary.current_batch)})
+            elif parsed.path == "/sync":
+                results = primary.sync_secondaries()
+                self._send_json(200, {"ok": True, "secondaries": results})
             else:
                 self._send_json(404, {"error": "not found"})
         else:

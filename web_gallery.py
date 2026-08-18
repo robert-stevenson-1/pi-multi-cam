@@ -43,10 +43,12 @@ img{{width:100%;height:auto;display:block;border-radius:6px}}
 .card{{margin-bottom:2rem;border-top:2px solid #ddd;padding-top:1rem}}
 button{{font-size:1.1rem;padding:.6rem 1.4rem;cursor:pointer}}
 #status{{margin-left:1rem;color:#666}}
+#syncstatus{{margin-left:1rem;color:#666}}
 </style></head>
 <body>
 <h1>Capture Gallery</h1>
 <button onclick="capture()">Capture All</button><span id="status"></span>
+<button onclick="syncNow()">Sync now</button><span id="syncstatus"></span>
 {''.join(cards)}
 <script>
 function capture() {{
@@ -55,6 +57,20 @@ function capture() {{
   fetch('/capture', {{method:'POST'}})
     .then(r => r.json())
     .then(d => {{ s.textContent = d.ok ? 'Done. Refresh to view.' : 'Failed: ' + (d.error||''); setTimeout(()=>location.reload(), 800); }})
+    .catch(e => {{ s.textContent = 'Error: ' + e; }});
+}}
+function syncNow() {{
+  const s = document.getElementById('syncstatus');
+  s.textContent = 'Syncing secondaries...';
+  fetch('/sync', {{method:'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (!d.ok) {{ s.textContent = 'Failed: ' + (d.error||''); return; }}
+      const parts = Object.entries(d.secondaries).map(([k,v]) =>
+        v.error ? k+': error '+v.error : k+': pushed '+v.pushed+', failed '+v.failed);
+      s.textContent = parts.length ? 'Synced — ' + parts.join(' | ') : 'No secondaries registered.';
+      setTimeout(()=>location.reload(), 1200);
+    }})
     .catch(e => {{ s.textContent = 'Error: ' + e; }});
 }}
 </script>
@@ -82,6 +98,15 @@ class Handler(SimpleHTTPRequestHandler):
                 resp = urllib.request.urlopen(req, timeout=10)
                 body = json.loads(resp.read().decode())
                 self._send_json(200, {"ok": True, "primary": body})
+            except Exception as e:
+                self._send_json(500, {"ok": False, "error": str(e)})
+        elif self.path == "/sync":
+            url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/sync"
+            try:
+                req = urllib.request.Request(url, data=b"", method="POST")
+                resp = urllib.request.urlopen(req, timeout=90)
+                body = json.loads(resp.read().decode())
+                self._send_json(200, {"ok": True, "secondaries": body.get("secondaries", {})})
             except Exception as e:
                 self._send_json(500, {"ok": False, "error": str(e)})
         else:
