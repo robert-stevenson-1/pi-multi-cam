@@ -125,6 +125,14 @@ def batch_stamp():
     return f"{stamp}_{h}"
 
 
+def write_frame(path, frame):
+    cv2.imwrite(path, frame)
+    h, w = frame.shape[:2]
+    tw = 480
+    th = max(1, int(h * tw / w))
+    cv2.imwrite(path[:-4] + "_thumb.jpg", cv2.resize(frame, (tw, th)))
+
+
 class Primary:
     def __init__(self):
         self.lock = threading.Lock()
@@ -143,7 +151,7 @@ class Primary:
                 batch = self.current_batch
             frames = grab_frames()
             for idx, frame in enumerate(frames):
-                cv2.imwrite(os.path.join(batch, f"{PI_ID}_cam{idx}.jpg"), frame)
+                write_frame(os.path.join(batch, f"{PI_ID}_cam{idx}.jpg"), frame)
             print(f"Captured {len(frames)} local frame(s) in {os.path.basename(batch)}")
         if remote:
             self.fire_secondaries(os.path.basename(batch))
@@ -175,6 +183,12 @@ class Primary:
             path = os.path.join(batch_dir if batch else self.current_batch, f"{pi_id}_cam{cam_idx}.jpg")
         with open(path, "wb") as f:
             f.write(data)
+        frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if frame is not None:
+            h, w = frame.shape[:2]
+            tw = 480
+            th = max(1, int(h * tw / w))
+            cv2.imwrite(path[:-4] + "_thumb.jpg", cv2.resize(frame, (tw, th)))
         print(f"Saved {pi_id}_cam{cam_idx}.jpg")
 
     def sync_secondaries(self):

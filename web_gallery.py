@@ -27,10 +27,10 @@ PRIMARY_PORT = int(os.getenv("PRIMARY_PORT", "8080"))
 
 def gallery_html(folders):
     cards = []
-    for name, imgs in folders:
+    for name, entries in folders:
         thumbs = "".join(
-            f'<figure><img src="{name}/{img}" loading="lazy"><figcaption>{img}</figcaption></figure>'
-            for img in imgs
+            f'<figure><img src="{name}/{thumb or img}" loading="lazy"><figcaption>{img}</figcaption></figure>'
+            for img, thumb in entries
         )
         cards.append(f'<div class="card"><h2>{name}</h2><div class="grid">{thumbs}</div></div>')
     return f"""<!doctype html>
@@ -161,8 +161,15 @@ class Handler(SimpleHTTPRequestHandler):
             for name in sorted(os.listdir(CAPTURES_DIR), reverse=True):
                 path = os.path.join(CAPTURES_DIR, name)
                 if os.path.isdir(path):
-                    imgs = sorted(f for f in os.listdir(path) if f.endswith(".jpg"))
-                    folders.append((name, imgs))
+                    entries = []
+                    for f in sorted(os.listdir(path)):
+                        if not f.endswith(".jpg") or f.endswith("_thumb.jpg"):
+                            continue
+                        thumb = f[:-4] + "_thumb.jpg"
+                        if not os.path.exists(os.path.join(path, thumb)):
+                            thumb = None
+                        entries.append((f, thumb))
+                    folders.append((name, entries))
         body = gallery_html(folders).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
