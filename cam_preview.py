@@ -29,7 +29,7 @@ cameras = []
 for i in range(2):
     try:
         cam = Picamera2(i)
-        cam.configure(cam.create_video_configuration(main={"size": SIZE}))
+        cam.configure(cam.create_video_configuration(main={"size": SIZE, "format": "RGB888"}))
         cam.start()
         cameras.append(cam)
         print(f"Camera {i} connected. Streaming {SIZE}")
@@ -66,6 +66,8 @@ def stream_frames(handler, cam_idx):
             time.sleep(1 / 12)
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass
+    except Exception as e:
+        print(f"stream {cam_idx} error: {e}")
 
 
 class Handler(BaseHTTPRequestHandler):
