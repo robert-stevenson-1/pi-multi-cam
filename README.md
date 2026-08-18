@@ -4,10 +4,17 @@ Synchronized multi-camera capture on Raspberry Pi 5 — one primary + up to 3 se
 
 ## Dependencies
 
-- `picamera2`
-- `opencv-python` (`cv2`)
-- `numpy`
-- `gpiod` (for GPIO button trigger; optional, degrades gracefully)
+Install from `apt`, not pip: pip's `opencv-python` drags in numpy 2.x, which breaks picamera2's `simplejpeg`. Full Raspberry Pi OS images (Bookworm+) ship picamera2 pre-installed; on Lite run the full line:
+
+```bash
+sudo apt update
+sudo apt install python3-picamera2 python3-opencv python3-gpiod
+```
+
+- `picamera2` (pre-installed on full Raspberry Pi OS images; `python3-picamera2` on Lite)
+- `python3-opencv` (`cv2`)
+- `numpy` (pulled in by the above)
+- `python3-gpiod` (GPIO button trigger; optional, degrades gracefully)
 
 ## Architecture
 
@@ -30,6 +37,12 @@ python3 web_gallery.py       # http://<primary-ip>:8088
 
 ```bash
 python3 cam_server.py
+```
+
+**Camera debug** (standalone, instead of `cam_server.py` — both can't hold the cameras at once): live grid of all camera feeds in the browser.
+
+```bash
+python3 cam_preview.py    # http://<pi-ip>:9090
 ```
 
 No display needed on any Pi. Foreground processes — use tmux/systemd to background them.
