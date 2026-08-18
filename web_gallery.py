@@ -23,18 +23,39 @@ PORT = int(os.getenv("PORT", "8088"))
 CAPTURES_DIR = os.getenv("CAPTURES_DIR", "captures")
 PRIMARY_HOST = os.getenv("PRIMARY_HOST", "127.0.0.1")
 PRIMARY_PORT = int(os.getenv("PRIMARY_PORT", "8080"))
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+
+def jpeg_size(path):
+    with open(path, "rb") as f:
+        data = f.read(65536)
+    if len(data) < 12 or data[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    while i + 8 < len(data):
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+            return ((data[i + 7] << 8) | data[i + 8], (data[i + 5] << 8) | data[i + 6])
+        i += 2 + ((data[i + 2] << 8) | data[i + 3])
+    return None
 
 
 def gallery_html(folders):
     cards = []
     for name, entries in folders:
         thumbs = "".join(
-            f'<figure><img src="{name}/{thumb or img}" loading="lazy"><figcaption>{img}</figcaption></figure>'
-            for img, thumb in entries
+            f'<figure><a href="{name}/{img}" data-pswp-width="{w}" data-pswp-height="{h}">'
+            f'<img src="{name}/{thumb or img}" loading="lazy"></a>'
+            f'<figcaption>{img}</figcaption></figure>'
+            for img, thumb, w, h in entries
         )
         cards.append(f'<div class="card"><h2>{name}</h2><div class="grid">{thumbs}</div></div>')
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Capture Gallery</title>
+<link rel="stylesheet" href="/static/photoswipe/photoswipe.css">
 <style>
 body{{font-family:system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem}}
@@ -100,6 +121,15 @@ function purge() {{
     .catch(e => {{ s.textContent = 'Error: ' + e; b.textContent = 'Purge secondaries'; purgeArmed = false; }});
 }}
 </script>
+<script type="module">
+import PhotoSwipeLightbox from '/static/photoswipe/photoswipe-lightbox.esm.js';
+const lightbox = new PhotoSwipeLightbox({{
+  gallery: '.grid',
+  children: 'a',
+  pswpModule: () => import('/static/photoswipe/photoswipe.esm.js')
+}});
+lightbox.init();
+</script>
 </body></html>"""
 
 
@@ -111,8 +141,11 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if urllib.parse.urlparse(self.path).path in ("/", ""):
+        path = urllib.parse.urlparse(self.path).path
+        if path in ("/", ""):
             self._serve_gallery()
+        elif path.startswith("/static/"):
+            self._serve_static()
         else:
             super().do_GET()
 
@@ -168,7 +201,9 @@ class Handler(SimpleHTTPRequestHandler):
                         thumb = f[:-4] + "_thumb.jpg"
                         if not os.path.exists(os.path.join(path, thumb)):
                             thumb = None
-                        entries.append((f, thumb))
+                        size = jpeg_size(os.path.join(path, f))
+                        w, h = size if size else (1920, 1080)
+                        entries.append((f, thumb, w, h))
                     folders.append((name, entries))
         body = gallery_html(folders).encode()
         self.send_response(200)
@@ -176,6 +211,21 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _serve_static(self):
+        rel = urllib.parse.urlparse(self.path).path[len("/static/"):]
+        full = os.path.normpath(os.path.join(STATIC_DIR, rel))
+        if not full.startswith(STATIC_DIR) or not os.path.isfile(full):
+            self.send_error(404)
+            return
+        ctype = "application/javascript" if full.endswith(".js") else "text/css"
+        with open(full, "rb") as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
 
 def main():
