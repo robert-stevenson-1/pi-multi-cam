@@ -1,5 +1,7 @@
 import os
 import json
+import tempfile
+import zipfile
 import urllib.parse
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -45,17 +47,21 @@ def jpeg_size(path):
 
 def gallery_html(sections):
     cards = []
-    for title, cardlist in sections:
+    for title, cardlist, is_session in sections:
         if title:
-            cards.append(f'<h2 class="sess">{title}</h2>')
+            dl = f' <a class="dl" href="/zip/session/{urllib.parse.quote(title)}">download</a>' if is_session else ""
+            cards.append(f'<h2 class="sess">{title}{dl}</h2>')
         for name, entries in cardlist:
             thumbs = "".join(
                 f'<figure><a href="{name}/{img}" data-pswp-width="{w}" data-pswp-height="{h}">'
                 f'<img src="{name}/{thumb or img}" loading="lazy"></a>'
-                f'<figcaption>{img}</figcaption></figure>'
+                f'<figcaption>{img} <a class="dl" href="{name}/{img}" download>save</a></figcaption></figure>'
                 for img, thumb, w, h in entries
             )
-            cards.append(f'<div class="card"><h3>{name}</h3><div class="grid">{thumbs}</div></div>')
+            cards.append(
+                f'<div class="card"><h3>{name} <a class="dl" href="/zip/{name}">download batch</a></h3>'
+                f'<div class="grid">{thumbs}</div></div>'
+            )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Capture Gallery</title>
 <link rel="stylesheet" href="/static/photoswipe/photoswipe.css">
@@ -66,6 +72,7 @@ figure{{margin:0}}
 img{{width:100%;height:auto;display:block;border-radius:6px}}
 .card{{margin-bottom:2rem;border-top:2px solid #ddd;padding-top:1rem}}
 .sess{{color:#555;text-transform:uppercase;font-size:.9rem;letter-spacing:.05em;margin:1.5rem 0 .25rem}}
+.dl{{font-size:.85rem;font-weight:normal;color:#888;margin-left:.5rem}}
 button{{font-size:1.1rem;padding:.6rem 1.4rem;cursor:pointer}}
 input{{font-size:1.1rem;padding:.6rem .8rem}}
 #status{{margin-left:1rem;color:#666}}
@@ -176,6 +183,8 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_gallery()
         elif path.startswith("/static/"):
             self._serve_static()
+        elif path.startswith("/zip/"):
+            self._serve_zip(urllib.parse.unquote(path[len("/zip/"):]))
         else:
             super().do_GET()
 
@@ -242,9 +251,9 @@ class Handler(SimpleHTTPRequestHandler):
         for s in sessions:
             cards = [(b, by_name.pop(b, [])) for b in s.get("batches", []) if b in by_name]
             if cards:
-                sections.append((s["name"], cards))
+                sections.append((s["name"], cards, True))
         if by_name:
-            sections.append(("Ungrouped", [(n, e) for n, e in by_name.items()]))
+            sections.append(("Ungrouped", [(n, e) for n, e in by_name.items()], False))
         body = gallery_html(sections).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -266,6 +275,61 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _session_batches(self, sname):
+        try:
+            with open(os.path.join(CAPTURES_DIR, "sessions.json")) as f:
+                sessions = json.load(f)
+        except Exception:
+            return []
+        for s in sessions:
+            if s.get("name") == sname:
+                return s.get("batches", [])
+        return []
+
+    def _serve_zip(self, target):
+        if target.startswith("session/"):
+            names = self._session_batches(target[len("session/"):])
+            dlname = target.replace("/", "_") + ".zip"
+        else:
+            names = [target]
+            dlname = target + ".zip"
+        folders = []
+        for n in names:
+            if not all(c.isalnum() or c == "_" for c in n):
+                self.send_error(400)
+                return
+            full = os.path.join(CAPTURES_DIR, n)
+            if os.path.isdir(full):
+                folders.append(full)
+        if not folders:
+            self.send_error(404)
+            return
+        fd, tmp = tempfile.mkstemp(suffix=".zip")
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
+                for folder in folders:
+                    for fname in sorted(os.listdir(folder)):
+                        if fname.endswith(".jpg") and not fname.endswith("_thumb.jpg"):
+                            zf.write(
+                                os.path.join(folder, fname),
+                                arcname=os.path.join(os.path.basename(folder), fname),
+                            )
+            size = os.path.getsize(tmp)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{dlname}"')
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            with open(tmp, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        finally:
+            os.remove(tmp)
 
 
 def main():
