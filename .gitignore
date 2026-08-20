@@ -232,3 +232,5 @@ agents/*
 *.png
 *.bmp
 *.webp
+CAD
+.playwright-mcp
