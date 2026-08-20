@@ -232,5 +232,8 @@ agents/*
 *.png
 *.bmp
 *.webp
-CAD
-.playwright-mcp
+
+# Local hardware, capture, and browser artifacts
+/captures/
+/CAD/
+/.playwright-mcp/
