@@ -78,9 +78,11 @@ input{{font-size:1.1rem;padding:.6rem .8rem}}
 #status{{margin-left:1rem;color:#666}}
 #syncstatus{{margin-left:1rem;color:#666}}
 #sessstatus{{margin-left:1rem;color:#666}}
+#srvstatus{{margin:.5rem 0;color:#666}}
 </style></head>
 <body>
 <h1>Capture Gallery</h1>
+<div id="srvstatus"></div>
 <button onclick="capture()">Capture All</button><span id="status"></span>
 <button onclick="syncNow()">Sync now</button><span id="syncstatus"></span>
 <button id="purgebtn" onclick="purge()">Purge secondaries</button>
@@ -157,6 +159,35 @@ function stopSession() {{
     .then(d => {{ s.textContent = d.ok ? 'Stopped.' : 'Failed: ' + (d.error||''); setTimeout(()=>location.reload(), 800); }})
     .catch(e => {{ s.textContent = 'Error: ' + e; }});
 }}
+function pollStatus() {{
+  fetch('/server-status')
+    .then(r => r.json())
+    .then(d => {{
+      const el = document.getElementById('srvstatus');
+      if (!d.ok) {{
+        el.textContent = 'cam_server DOWN — start with ./launch_primary.sh start';
+        el.style.color = '#c00';
+        return;
+      }}
+      const p = d.primary;
+      let parts = ['cam_server up · ' + (p.cameras || 0) + ' cams' + (p.session ? ' · session: ' + p.session : '')];
+      const secs = Object.entries(d.secondaries);
+      if (secs.length) {{
+        parts.push(secs.map(([k, v]) => k + ' @ ' + v.addr + ': ' + (v.up ? 'up · ' + (v.cameras || 0) + ' cam' : 'DOWN')).join(' | '));
+      }} else {{
+        parts.push('no secondaries registered');
+      }}
+      el.textContent = parts.join(' — ');
+      el.style.color = '#666';
+    }})
+    .catch(e => {{
+      const el = document.getElementById('srvstatus');
+      el.textContent = 'status error: ' + e;
+      el.style.color = '#c00';
+    }});
+}}
+pollStatus();
+setInterval(pollStatus, 5000);
 </script>
 <script type="module">
 import PhotoSwipeLightbox from '/static/photoswipe/photoswipe-lightbox.esm.js';
@@ -181,6 +212,8 @@ class Handler(SimpleHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path in ("/", ""):
             self._serve_gallery()
+        elif path == "/server-status":
+            self._send_json(200, self._server_status())
         elif path.startswith("/static/"):
             self._serve_static()
         elif path.startswith("/zip/"):
@@ -214,6 +247,28 @@ class Handler(SimpleHTTPRequestHandler):
             return json.loads(resp.read().decode())
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def _server_status(self):
+        result = {"ok": False, "primary": None, "secondaries": {}}
+        try:
+            resp = urllib.request.urlopen(f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/status", timeout=2)
+            result["primary"] = json.loads(resp.read().decode())
+            result["ok"] = True
+        except Exception as e:
+            result["error"] = str(e)
+            return result
+        for pi_id, addr in result["primary"].get("secondaries", {}).items():
+            ip, _, port = addr.partition(":")
+            entry = {"addr": addr, "up": False, "cameras": None}
+            try:
+                resp = urllib.request.urlopen(f"http://{ip}:{port}/status", timeout=2)
+                data = json.loads(resp.read().decode())
+                entry["up"] = True
+                entry["cameras"] = data.get("cameras")
+            except Exception as e:
+                entry["error"] = str(e)
+            result["secondaries"][pi_id] = entry
+        return result
 
     def _send_json(self, code, obj):
         body = json.dumps(obj).encode()

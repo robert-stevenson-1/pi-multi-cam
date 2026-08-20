@@ -381,10 +381,21 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if PRIMARY:
-            self._send_json(404, {"error": "not found"})
-            return
         path = urllib.parse.urlparse(self.path).path
+        if PRIMARY:
+            if path == "/status":
+                with primary.lock:
+                    secs = {k: f"{ip}:{port}" for k, (ip, port) in primary.secondaries.items()}
+                self._send_json(200, {
+                    "pi_id": PI_ID,
+                    "mode": "primary",
+                    "cameras": len(cameras),
+                    "session": primary.current_session,
+                    "secondaries": secs,
+                })
+            else:
+                self._send_json(404, {"error": "not found"})
+            return
         if path == "/capture":
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             batch = qs.get("batch", [None])[0]

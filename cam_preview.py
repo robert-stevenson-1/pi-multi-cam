@@ -22,7 +22,7 @@ def load_env(path=".env"):
 
 load_env()
 
-PORT = int(os.getenv("PORT", "9090"))
+PORT = int(os.getenv("PREVIEW_PORT", "9090"))
 SIZE = tuple(map(int, os.getenv("SIZE", "640x480").split("x", 1)))
 
 cameras = []

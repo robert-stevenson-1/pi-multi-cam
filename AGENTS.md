@@ -15,7 +15,7 @@ Multi-Pi synchronized capture on Raspberry Pi 5. Two scripts, all stdlib (no new
 
 Shared **active-low** button wired to every Pi's `GPIO_TRIGGER_PIN` (pull-up set in software, no external resistor). A press makes all Pis capture simultaneously via hardware — the network is only used *after* capture for secondaries to push frames to the primary.
 
-- **Primary** (`MODE="p"`, one Pi): HTTP server on `PRIMARY_PORT` — `POST /register` (secondaries announce themselves), `POST /upload` (frames routed by `batch` param or current batch folder), `POST /remote-capture` (software trigger, passes its batch name to secondaries), `POST /sync` (fans out to secondaries, backfills missing frames), `POST /purge-secondaries` (remote wipe of secondaries' local captures), `POST /session/start|stop` (active capture session; batches register into `sessions.json`). Keyboard `c`/`q` on stdin.
+- **Primary** (`MODE="p"`, one Pi): HTTP server on `PRIMARY_PORT` — `GET /status` (pi_id, camera count, active session, registered secondaries), `POST /register` (secondaries announce themselves), `POST /upload` (frames routed by `batch` param or current batch folder), `POST /remote-capture` (software trigger, passes its batch name to secondaries), `POST /sync` (fans out to secondaries, backfills missing frames), `POST /purge-secondaries` (remote wipe of secondaries' local captures), `POST /session/start|stop` (active capture session; batches register into `sessions.json`). Keyboard `c`/`q` on stdin.
 - **Secondary** (`MODE="s"`, up to `MAX_SECONDARIES`=3): registers with `PRIMARY_HOST` at startup, HTTP server on `SECONDARY_PORT` — `GET /capture` (web-trigger path, optional `?batch=`), `GET /status`, `GET /sync` (pushes every local capture without a `.ok` marker), `POST /purge` (deletes local captures, returns count). Headless. **Store-and-forward:** every capture is saved locally under the same batch naming scheme, uploaded, then marked `<file>.ok` on success — so offline periods are recovered by a later sync.
 
 Two trigger paths: **GPIO** (all Pis fire at once) and **web gallery "Capture All"** → primary `/remote-capture` → `GET /capture?batch=<name>` on every registered secondary. The primary batches uploads into `captures/<YYYYMMDD_HHMMSS>_<hash>/<pi_id>_cam<idx>.jpg`; uploads carry a `batch` name (secondary-local, computed from the same scheme) or fall back to the current batch.
@@ -44,7 +44,7 @@ Config is read from `.env` (loaded by both scripts at startup, fallback to in-co
 - `GPIO_TRIGGER_PIN`: BCM pin, `-1` disables; active-low, 0.5s software debounce.
 - `CAPTURES_DIR`: output directory.
 
-`web_gallery.py` knobs: `PORT`, `CAPTURES_DIR`, `PRIMARY_HOST`/`PRIMARY_PORT` (proxy target for the capture button; defaults to `127.0.0.1:8080`).
+`web_gallery.py` knobs: `PORT`, `CAPTURES_DIR`, `PRIMARY_HOST`/`PRIMARY_PORT` (proxy target for the capture button; defaults to `127.0.0.1:8080`). `cam_preview.py` uses its own `PREVIEW_PORT` (default 9090) so it never collides with `web_gallery`'s `PORT`. The gallery header shows a live status line (`GET /server-status`: primary `/status` proxy + direct pings to each registered secondary's `:SECONDARY_PORT/status`) — red `cam_server DOWN` when the primary backend is unreachable.
 
 ## Conventions
 
