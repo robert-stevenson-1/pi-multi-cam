@@ -22,15 +22,22 @@ A shared **active-low** button is wired to every Pi's `GPIO_TRIGGER_PIN` (pull-u
 
 - **Primary** (`MODE="p"`): capture daemon + HTTP server. Bundles every capture into a timestamped folder.
 - **Secondary** (`MODE="s"`, up to 3): headless capture daemon. Registers with the primary at startup, stores every capture locally, then uploads it. Unsynced frames (e.g. primary was down) are pushed later via the gallery's **Sync now**.
-- **Gallery** (`web_gallery.py`): browser UI on the primary — preview (PhotoSwipe lightbox), software capture trigger, sync, secondary purge, sessions, downloads.
+- **Gallery** (`web_gallery.py`): browser UI on the primary — PhotoSwipe lightbox, software capture trigger, sync, secondary purge, sessions, downloads, and live primary/secondary health status.
 
 ## Usage
 
 **Primary:**
 
 ```bash
+./launch_primary.sh start   # cam_server + web_gallery
+# http://<primary-ip>:8088
+```
+
+To run the services in the foreground instead, use two terminals:
+
+```bash
 python3 cam_server.py
-python3 web_gallery.py       # http://<primary-ip>:8088
+python3 web_gallery.py
 ```
 
 **Each secondary** (`.env` with `MODE = "s"`, unique `PI_ID`, `PRIMARY_HOST` set):
@@ -54,6 +61,17 @@ No display needed on any Pi. Foreground processes — use tmux/systemd to backgr
 ./launch_secondary.sh      # each secondary: cam_server
 ```
 
+Use `status` to see process IDs and the latest log lines. The full logs are in `.run/`:
+
+```bash
+./launch_primary.sh status
+tail -f .run/cam_server.log .run/web_gallery.log
+```
+
+On a secondary, use `./launch_secondary.sh status` and `tail -f .run/cam_server.log`.
+
+Start the primary before the secondaries. A secondary registers once at startup; restart it after the primary has been restarted so it registers again.
+
 ### Triggers
 
 - **GPIO button**: all Pis fire at once.
@@ -65,6 +83,8 @@ No display needed on any Pi. Foreground processes — use tmux/systemd to backgr
 - **Capture All** — software trigger.
 - **Sync now** — every registered secondary pushes its locally stored captures the primary is missing (recovers frames from when the primary was offline). Secondaries keep local copies after upload (marked `.ok`) until **Purge secondaries** wipes them (two-step confirmation in the UI).
 - **Sessions** — start/stop a named session from the gallery; captures taken while a session is active are grouped under it (manifest in `captures/sessions.json`, folder layout unchanged). GPIO and web captures both join the active session.
+- **Live status** — the header shows whether the primary cam_server is reachable, its camera count, the active session, and the live state of registered secondaries. A red **Primary Down** pill means the gallery cannot reach `PRIMARY_HOST:PRIMARY_PORT`.
+- **In-place gallery updates** — refreshes keep open session sections in place; sessions can be expanded or collapsed individually or all at once.
 - **Lightbox** — click any thumbnail for a fullscreen PhotoSwipe preview (swipe, keyboard, pinch-zoom). Vendored in `static/photoswipe/`, fully offline.
 - **Downloads** — per-image "save", per-batch "download batch", per-session "download" as a ZIP of the full-res frames.
 
@@ -108,3 +128,7 @@ nano .env
 - `GPIO_TRIGGER_PIN`: BCM pin, `-1` disables; active-low, 0.5s software debounce.
 - `CAPTURES_DIR`: output directory.
 - `PORT`: web_gallery port.
+- `PREVIEW_PORT`: standalone `cam_preview.py` port, default `9090`.
+- `SIZE`: standalone preview size, default `640x480`.
+
+`cam_preview.py` is a standalone camera diagnostic. It cannot run at the same time as `cam_server.py` on the same Pi because both processes need to own the cameras. Its `PREVIEW_PORT` is separate from the gallery's `PORT`.

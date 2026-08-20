@@ -1,22 +1,23 @@
 # AGENTS.md
 
-Multi-Pi synchronized capture on Raspberry Pi 5. Two scripts, all stdlib (no new Python deps):
+Multi-Pi synchronized capture on Raspberry Pi 5. Core services use the standard library apart from the Raspberry Pi camera stack:
 
 - `cam_server.py` — capture daemon, one instance per Pi. Role set by `MODE` (`"p"`/`"s"`).
 - `web_gallery.py` — HTTP gallery + remote controls, run on the primary only. Serves vendored static assets from `static/` (PhotoSwipe, committed to the repo — keep them vendored and offline, no CDNs, since the primary will be a hotspot).
+- `cam_preview.py` — standalone browser camera diagnostic; do not run it alongside `cam_server.py` on the same Pi.
 
 ## Hardware-only, no dev loop
 
 - Pi 5 only: `picamera2`, `libcamera`, `gpiod` are Pi-only. Nothing can be imported, linted, or tested on a normal dev machine — do not try to run it or add CI/tests.
-- Validate by inspection only; `python3 -m py_compile cam_server.py web_gallery.py` works for syntax.
-- `gpiod` import is guarded (`try/except ImportError`) and degrades gracefully — keep it that way.
+- Validate by inspection only; `python3 -m py_compile cam_server.py cam_preview.py web_gallery.py` works for syntax.
+- `gpiod` import and setup are guarded and degrade gracefully — keep any GPIO failure from stopping camera service startup.
 
 ## Architecture
 
 Shared **active-low** button wired to every Pi's `GPIO_TRIGGER_PIN` (pull-up set in software, no external resistor). A press makes all Pis capture simultaneously via hardware — the network is only used *after* capture for secondaries to push frames to the primary.
 
 - **Primary** (`MODE="p"`, one Pi): HTTP server on `PRIMARY_PORT` — `GET /status` (pi_id, camera count, active session, registered secondaries), `POST /register` (secondaries announce themselves), `POST /upload` (frames routed by `batch` param or current batch folder), `POST /remote-capture` (software trigger, passes its batch name to secondaries), `POST /sync` (fans out to secondaries, backfills missing frames), `POST /purge-secondaries` (remote wipe of secondaries' local captures), `POST /session/start|stop` (active capture session; batches register into `sessions.json`). Keyboard `c`/`q` on stdin.
-- **Secondary** (`MODE="s"`, up to `MAX_SECONDARIES`=3): registers with `PRIMARY_HOST` at startup, HTTP server on `SECONDARY_PORT` — `GET /capture` (web-trigger path, optional `?batch=`), `GET /status`, `GET /sync` (pushes every local capture without a `.ok` marker), `POST /purge` (deletes local captures, returns count). Headless. **Store-and-forward:** every capture is saved locally under the same batch naming scheme, uploaded, then marked `<file>.ok` on success — so offline periods are recovered by a later sync.
+- **Secondary** (`MODE="s"`, up to `MAX_SECONDARIES`=3): registers with `PRIMARY_HOST` at startup, HTTP server on `SECONDARY_PORT` — `GET /capture` (web-trigger path, optional `?batch=`), `GET /status`, `GET /sync` (pushes every local capture without a `.ok` marker), `POST /purge` (deletes local captures, returns count). Registration is one-shot, so restart secondaries after restarting the primary. Headless. **Store-and-forward:** every capture is saved locally under the same batch naming scheme, uploaded, then marked `<file>.ok` on success — so offline periods are recovered by a later sync.
 
 Two trigger paths: **GPIO** (all Pis fire at once) and **web gallery "Capture All"** → primary `/remote-capture` → `GET /capture?batch=<name>` on every registered secondary. The primary batches uploads into `captures/<YYYYMMDD_HHMMSS>_<hash>/<pi_id>_cam<idx>.jpg`; uploads carry a `batch` name (secondary-local, computed from the same scheme) or fall back to the current batch.
 
@@ -29,7 +30,7 @@ python3 cam_server.py        # copy .env.example to .env and edit per Pi first
 python3 web_gallery.py       # primary only; http://<primary-ip>:8088
 ```
 
-No display needed on any Pi. Foreground process — use tmux/systemd to background it. Alternatively `./launch_primary.sh` (cam_server + web_gallery) and `./launch_secondary.sh` (cam_server) — start/stop/status/restart, toggle on bare invocation; PID files + logs in `.run/` (gitignored).
+No display needed on any Pi. Foreground process — use tmux/systemd to background it. Alternatively `./launch_primary.sh` (cam_server + web_gallery) and `./launch_secondary.sh` (cam_server) — start/stop/status/restart, toggle on bare invocation; process state and logs are in `.run/` (gitignored). `status` shows the PID and last three log lines; `tail -f .run/*.log` follows the live output.
 
 ## Config (`.env`, gitignored)
 
@@ -44,7 +45,7 @@ Config is read from `.env` (loaded by both scripts at startup, fallback to in-co
 - `GPIO_TRIGGER_PIN`: BCM pin, `-1` disables; active-low, 0.5s software debounce.
 - `CAPTURES_DIR`: output directory.
 
-`web_gallery.py` knobs: `PORT`, `CAPTURES_DIR`, `PRIMARY_HOST`/`PRIMARY_PORT` (proxy target for the capture button; defaults to `127.0.0.1:8080`). `cam_preview.py` uses its own `PREVIEW_PORT` (default 9090) so it never collides with `web_gallery`'s `PORT`. The gallery header shows a live status line (`GET /server-status`: primary `/status` proxy + direct pings to each registered secondary's `:SECONDARY_PORT/status`) — red `cam_server DOWN` when the primary backend is unreachable.
+`web_gallery.py` knobs: `PORT`, `CAPTURES_DIR`, `PRIMARY_HOST`/`PRIMARY_PORT` (proxy target for controls; defaults to `127.0.0.1:8080`). `GET /server-status` combines the primary `/status` response with direct pings to each registered secondary's `/status`; the gallery header polls it every five seconds and shows a red `Primary Down` pill when the primary backend is unreachable. `cam_preview.py` uses its own `PREVIEW_PORT` (default `9090`) and `SIZE` (default `640x480`).
 
 ## Conventions
 
