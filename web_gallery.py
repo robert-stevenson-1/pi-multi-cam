@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import tempfile
 import zipfile
@@ -45,7 +46,23 @@ def jpeg_size(path):
     return None
 
 
-def gallery_html(sections):
+def format_batch_display(name):
+    m = re.match(r"^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_([a-f0-9]+)$", name)
+    if m:
+        year, month, day, hour, minute, sec, hsh = m.groups()
+        return f"{year}-{month}-{day} {hour}:{minute}:{sec}", hsh
+    return name, None
+
+
+def parse_device_badge(img_name):
+    base, _ = os.path.splitext(img_name)
+    parts = base.split("_")
+    if len(parts) >= 2:
+        return f"{parts[0]} · {parts[1]}"
+    return base
+
+
+def gallery_cards_html(sections):
     cards = []
     for title, cardlist, is_session in sections:
         if title:
@@ -62,6 +79,11 @@ def gallery_html(sections):
                 f'<div class="card"><h3>{name} <a class="dl" href="/zip/{name}">download batch</a></h3>'
                 f'<div class="grid">{thumbs}</div></div>'
             )
+    return "".join(cards)
+
+
+def gallery_html(sections):
+    cards = gallery_cards_html(sections)
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Capture Gallery</title>
 <link rel="stylesheet" href="/static/photoswipe/photoswipe.css">
@@ -209,9 +231,13 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
+
         if path in ("/", ""):
-            self._serve_gallery()
+            partial = "partial" in query and query["partial"][0] in ("1", "true")
+            self._serve_gallery(partial=partial)
         elif path == "/server-status":
             self._send_json(200, self._server_status())
         elif path.startswith("/static/"):
@@ -309,7 +335,10 @@ class Handler(SimpleHTTPRequestHandler):
                 sections.append((s["name"], cards, True))
         if by_name:
             sections.append(("Ungrouped", [(n, e) for n, e in by_name.items()], False))
-        body = gallery_html(sections).encode()
+        if partial:
+            body = gallery_cards_html(sections).encode("utf-8")
+        else:
+            body = gallery_html(sections).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
