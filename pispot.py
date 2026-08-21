@@ -169,6 +169,14 @@ def stop(name=PROFILE):
     _run("nmcli", "connection", "down", name)
 
 
+def restart(name=PROFILE):
+    try:
+        stop(name)
+    except RuntimeError:
+        pass
+    start(name)
+
+
 def clients(iface):
     sig = {}
     if shutil.which("iw"):
@@ -240,11 +248,14 @@ class PiSpotApp(App):
                 Select(CHANNELS["bg"], prompt="Channel", id="chan"),
                 Horizontal(Label("Hidden network"), Switch(id="hidden"), id="hrow"),
                 Button("APPLY & RESTART HOTSPOT", variant="success", id="apply"),
-                Button("STOP HOTSPOT", variant="error", id="stop"),
+                Button("RESTART HOTSPOT", variant="warning", id="restart"),
+                Button("STOP HOTSPOT", variant="error", id="toggle"),
+                Button("QUIT", id="quit"),
                 id="config",
             )
             yield Vertical(
                 DataTable(id="clients"),
+                Button("REFRESH CLIENTS", id="refresh"),
                 Label("", id="refreshed"),
                 id="monitor",
             )
@@ -290,6 +301,9 @@ class PiSpotApp(App):
         self.query_one("#refreshed", Label).update(
             f"Last refreshed: {stamp} — {len(rows)} client(s)"
         )
+        toggle = self.query_one("#toggle", Button)
+        toggle.label = "STOP HOTSPOT" if state else "START HOTSPOT"
+        toggle.variant = "error" if state else "success"
 
     def _err(self, msg):
         self.notify(msg, severity="error", timeout=10)
@@ -325,13 +339,13 @@ class PiSpotApp(App):
         self.call_from_thread(self.refresh_all)
 
     @work(thread=True, exclusive=True)
-    def action_stop_hotspot(self):
+    def action_restart_hotspot(self):
         try:
-            stop()
+            restart()
         except RuntimeError as exc:
             self.call_from_thread(self._err, str(exc))
             return
-        self.call_from_thread(self.notify, "Hotspot stopped")
+        self.call_from_thread(self.notify, "Hotspot restarted")
         self.call_from_thread(self.refresh_all)
 
     @work(thread=True, exclusive=True)
@@ -379,8 +393,14 @@ class PiSpotApp(App):
         btn = event.button.id
         if btn == "apply":
             self.do_apply()
-        elif btn == "stop":
-            self.action_stop_hotspot()
+        elif btn == "restart":
+            self.action_restart_hotspot()
+        elif btn == "toggle":
+            self.action_toggle()
+        elif btn == "refresh":
+            self.refresh_all()
+        elif btn == "quit":
+            self.exit()
         elif btn == "eye":
             psk = self.query_one("#psk", Input)
             psk.password = not psk.password

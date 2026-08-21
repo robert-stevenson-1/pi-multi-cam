@@ -5,7 +5,7 @@ Multi-Pi synchronized capture on Raspberry Pi 5. Core services use the standard 
 - `cam_server.py` — capture daemon, one instance per Pi. Role set by `MODE` (`"p"`/`"s"`).
 - `web_gallery.py` — HTTP gallery + remote controls, run on the primary only. Serves vendored static assets from `static/` (PhotoSwipe, committed to the repo — keep them vendored and offline, no CDNs, since the primary will be a hotspot).
 - `cam_preview.py` — standalone browser camera diagnostic; do not run it alongside `cam_server.py` on the same Pi.
-- `pispot.py` — standalone hotspot TUI (NetworkManager config + client monitor), run under `sudo`. Needs current Textual from pip; apt's `python3-textual` (0.1.13) is too old and must not be installed. `apply()` pins the Hotspot profile below the uplink (`ipv4.never-default`, route-metric 700, dns-priority 200) and writes `/etc/sysctl.d/99-pispot.conf` (ip_forward) so sharing works over wlan0/eth0. Requires the Wi-Fi country code to be set on the host.
+- `pispot.py` — standalone hotspot TUI (NetworkManager config + client monitor), run under `sudo`. Needs current Textual from pip; apt's `python3-textual` (0.1.13) is too old and must not be installed. Every control is duplicated as an on-screen button (restart/toggle/refresh/quit) because terminals swallow keybindings while inputs hold focus. `apply()` pins the Hotspot profile below the uplink (`ipv4.never-default`, route-metric 700, dns-priority 200) and writes `/etc/sysctl.d/99-pispot.conf` (ip_forward) so sharing works over wlan0/eth0. Requires the Wi-Fi country code to be set on the host.
 
 ## Hardware-only, no dev loop
 
