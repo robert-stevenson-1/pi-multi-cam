@@ -34,6 +34,19 @@ from textual import work
 
 PROFILE = "Hotspot"
 SYSCTL_CONF = Path("/etc/sysctl.d/99-pispot.conf")
+UNIT_NAME = "pispot-hotspot.service"
+UNIT_FILE = Path("/etc/systemd/system") / UNIT_NAME
+UNIT = f"""[Unit]
+Description=PIPS delayed hotspot start
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "sleep 10 && nmcli connection up {PROFILE}"
+
+[Install]
+WantedBy=multi-user.target
+"""
 NEIGH_STATES = {"REACHABLE", "STALE", "DELAY", "PROBE"}
 BANDS = [("2.4 GHz (b/g/n)", "bg"), ("5 GHz (a/n/ac)", "a")]
 CHANNELS = {
@@ -111,6 +124,31 @@ def ensure_forwarding():
         pass
 
 
+def boot_start():
+    try:
+        _run("systemctl", "is-enabled", "--quiet", UNIT_NAME)
+    except RuntimeError:
+        return False
+    return True
+
+
+def _sync_unit():
+    try:
+        if UNIT_FILE.read_text() == UNIT:
+            return
+    except OSError:
+        pass
+    UNIT_FILE.write_text(UNIT)
+    _run("systemctl", "daemon-reload")
+
+
+def set_boot_start(on):
+    _run("nmcli", "connection", "modify", PROFILE,
+         "connection.autoconnect", "no")
+    _sync_unit()
+    _run("systemctl", "enable" if on else "disable", UNIT_NAME)
+
+
 def apply(cfg, iface=None, name=PROFILE):
     if load_profile(name) is None:
         args = [
@@ -122,7 +160,7 @@ def apply(cfg, iface=None, name=PROFILE):
             "con-name",
             name,
             "autoconnect",
-            "yes",
+            "no",
             "ssid",
             cfg["ssid"],
             "802-11-wireless.mode",
@@ -133,7 +171,7 @@ def apply(cfg, iface=None, name=PROFILE):
         if iface:
             args += ["ifname", iface]
         _run(*args)
-    _run(
+    args = [
         "nmcli",
         "connection",
         "modify",
@@ -156,7 +194,12 @@ def apply(cfg, iface=None, name=PROFILE):
         "700",
         "ipv4.dns-priority",
         "200",
-    )
+        "connection.autoconnect",
+        "no",
+    ]
+    if iface:
+        args += ["connection.interface-name", iface]
+    _run(*args)
     ensure_forwarding()
     _run("nmcli", "connection", "up", name)
 
@@ -219,8 +262,8 @@ class PiSpotApp(App):
     #config Label { margin-top: 1; }
     #row { height: 3; }
     #eye { width: 8; margin-left: 1; margin-top: 0; }
-    #hrow { height: auto; margin-top: 1; }
-    #hrow Label { margin-right: 1; }
+    #hrow, #brow { height: auto; margin-top: 1; }
+    #hrow Label, #brow Label { margin-right: 1; }
     Select, Input { margin-bottom: 1; }
     Button { margin-top: 1; width: 100%; }
     #refreshed { margin-top: 1; text-align: center; color: $text-muted; }
@@ -247,6 +290,7 @@ class PiSpotApp(App):
                 Label("Channel"),
                 Select(CHANNELS["bg"], prompt="Channel", id="chan"),
                 Horizontal(Label("Hidden network"), Switch(id="hidden"), id="hrow"),
+                Horizontal(Label("Start on boot"), Switch(id="boot"), id="brow"),
                 Button("APPLY & RESTART HOTSPOT", variant="success", id="apply"),
                 Button("RESTART HOTSPOT", variant="warning", id="restart"),
                 Button("STOP HOTSPOT", variant="error", id="toggle"),
@@ -264,6 +308,7 @@ class PiSpotApp(App):
     def on_mount(self) -> None:
         self.query_one("#clients", DataTable).add_columns("IP Address", "MAC Address", "Signal")
         self._ifaces = []
+        self._loading = False
         self.set_interval(5, self.refresh_all)
         self.init_load()
 
@@ -273,11 +318,15 @@ class PiSpotApp(App):
             return sel.value
         return self._ifaces[0] if self._ifaces else "wlan0"
 
-    def _fill_config(self, ifaces, prof):
+    def _fill_config(self, ifaces, prof, boot=False):
+        self._loading = True
         iface_sel = self.query_one("#iface", Select)
         iface_sel.set_options([(i, i) for i in ifaces] or [("wlan0", "wlan0")])
         if ifaces:
             iface_sel.value = ifaces[0]
+        boot_sw = self.query_one("#boot", Switch)
+        boot_sw.disabled = prof is None
+        boot_sw.value = bool(prof) and boot
         if prof:
             self.query_one("#ssid", Input).value = prof["ssid"]
             self.query_one("#psk", Input).value = prof["psk"]
@@ -290,6 +339,7 @@ class PiSpotApp(App):
             chan.set_options(opts)
             chan.value = prof["channel"]
             self.query_one("#hidden", Switch).value = prof["hidden"]
+        self._loading = False
 
     def _update_panes(self, state, ip, rows, stamp):
         dot, word = ("[green]●[/]", "ACTIVE") if state else ("[red]●[/]", "DOWN")
@@ -312,7 +362,8 @@ class PiSpotApp(App):
     def init_load(self):
         self._ifaces = wifi_ifaces()
         prof = load_profile()
-        self.call_from_thread(self._fill_config, self._ifaces, prof)
+        boot = boot_start() if prof else False
+        self.call_from_thread(self._fill_config, self._ifaces, prof, boot)
         self.call_from_thread(self.refresh_all)
 
     @work(thread=True, exclusive=True)
@@ -356,7 +407,27 @@ class PiSpotApp(App):
             self.call_from_thread(self._err, str(exc))
             return
         self.call_from_thread(self.notify, "Settings applied — hotspot restarted")
+        boot = boot_start()
+        self.call_from_thread(self._sync_boot, boot)
         self.call_from_thread(self.refresh_all)
+
+    def _sync_boot(self, boot):
+        sw = self.query_one("#boot", Switch)
+        sw.disabled = False
+        self._loading = True
+        sw.value = boot
+        self._loading = False
+
+    @work(thread=True, exclusive=True)
+    def _set_boot_worker(self, on):
+        try:
+            set_boot_start(on)
+        except RuntimeError as exc:
+            self.call_from_thread(self._err, str(exc))
+            self.call_from_thread(self._sync_boot, boot_start())
+            return
+        state = "will start 10s after boot" if on else "will not start at boot"
+        self.call_from_thread(self.notify, f"Hotspot {state}")
 
     def do_apply(self):
         band = self.query_one("#band", Select).value
@@ -388,6 +459,11 @@ class PiSpotApp(App):
         chan.set_options(opts)
         if any(v == current for _, v in opts):
             chan.value = current
+
+    def on_switch_changed(self, event):
+        if event.switch.id != "boot" or self._loading:
+            return
+        self._set_boot_worker(event.value)
 
     def on_button_pressed(self, event):
         btn = event.button.id

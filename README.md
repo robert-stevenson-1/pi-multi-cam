@@ -116,6 +116,7 @@ sudo python3 pispot.py
   - Set the Wi-Fi country code, or AP-mode radios (notably Realtek USB dongles) can stall the uplink: `sudo raspi-config nonint do_wifi_country GB`.
   - IP forwarding — **Apply & Restart** writes `/etc/sysctl.d/99-pispot.conf` (`net.ipv4.ip_forward=1`) automatically and keeps it across reboots.
 - The hotspot profile is pinned below the uplink for routing and DNS (`never-default`, high route metric, low DNS priority), so enabling the hotspot never hijacks the Pi's own internet.
+- **Start on boot**: the *Start on boot* switch manages a systemd unit (`pispot-hotspot.service`) that raises the hotspot **10 s after** NetworkManager starts, giving the uplink time to associate first. While it's on, `autoconnect` is forced off so the unit is the only boot path, and every Apply re-pins the hotspot to its configured interface so it can never claim `wlan0` at boot.
 - With a dual-band USB dongle, prefer Band `5 GHz` + Channel `36` so the hotspot doesn't share airtime with the 2.4 GHz uplink.
 
 ## GPIO Button Wiring
