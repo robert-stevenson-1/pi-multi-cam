@@ -1,6 +1,21 @@
 import shutil
 import subprocess
+from importlib.metadata import PackageNotFoundError, version
 from time import strftime
+
+try:
+    _ver = version("textual")
+except PackageNotFoundError:
+    raise SystemExit(
+        "Textual is not installed.\n"
+        "Run: sudo pip3 install --break-system-packages textual"
+    )
+if int(_ver.partition(".")[0]) < 1:
+    raise SystemExit(
+        f"Textual {_ver} (Debian's python3-textual) is too old.\n"
+        "Run: sudo apt remove python3-textual"
+        " && sudo pip3 install --break-system-packages textual"
+    )
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -14,7 +29,7 @@ from textual.widgets import (
     Select,
     Switch,
 )
-from textual.work import work
+from textual import work
 
 PROFILE = "Hotspot"
 NEIGH_STATES = {"REACHABLE", "STALE", "DELAY", "PROBE"}
