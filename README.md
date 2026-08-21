@@ -1,4 +1,4 @@
-# pi-multi-cam
+# PIPS - Plant Imaging Pi System
 
 Synchronized multi-camera capture on Raspberry Pi 5 — one primary + up to 3 secondaries. All stdlib besides the camera stack.
 
@@ -101,6 +101,22 @@ captures/
 ```
 
 Folder name = `YYYYMMDD_HHMMSS` + 4-char hash of the 200ms time bucket, so back-to-back presses within the same second still get distinct folders (identical across Pis for one press). Each file is tagged `<pi_id>_cam<idx>.jpg`. Secondaries mirror this layout locally; `.ok` sidecar markers track which frames have been synced to the primary.
+
+## Hotspot TUI (`pispot.py`)
+
+Terminal UI for the NetworkManager Wi-Fi hotspot: edit SSID/password/band/channel/hidden, start/stop, and monitor connected clients (IP, MAC, signal) with a 5s auto-refresh. Keys: `q` quit, `s` start/stop, `r` refresh.
+
+```bash
+sudo pip3 install --break-system-packages textual
+sudo python3 pispot.py
+```
+
+- **Do not use apt's `python3-textual`** — Bookworm ships 0.1.13, which is far too old; the script refuses to start on it.
+- **Internet sharing**: hotspot clients reach the internet through the Pi's uplink (`wlan0`/`eth0`). NetworkManager's `shared` mode provides DHCP/DNS/NAT; two things are needed on top:
+  - Set the Wi-Fi country code, or AP-mode radios (notably Realtek USB dongles) can stall the uplink: `sudo raspi-config nonint do_wifi_country GB`.
+  - IP forwarding — **Apply & Restart** writes `/etc/sysctl.d/99-pispot.conf` (`net.ipv4.ip_forward=1`) automatically and keeps it across reboots.
+- The hotspot profile is pinned below the uplink for routing and DNS (`never-default`, high route metric, low DNS priority), so enabling the hotspot never hijacks the Pi's own internet.
+- With a dual-band USB dongle, prefer Band `5 GHz` + Channel `36` so the hotspot doesn't share airtime with the 2.4 GHz uplink.
 
 ## GPIO Button Wiring
 

@@ -1,15 +1,16 @@
 # AGENTS.md
 
-Multi-Pi synchronized capture on Raspberry Pi 5. Core services use the standard library apart from the Raspberry Pi camera stack:
+Multi-Pi synchronized capture on Raspberry Pi 5. Core services use the standard library apart from the Raspberry Pi camera stack (`pispot.py` additionally needs Textual, pip-installed):
 
 - `cam_server.py` — capture daemon, one instance per Pi. Role set by `MODE` (`"p"`/`"s"`).
 - `web_gallery.py` — HTTP gallery + remote controls, run on the primary only. Serves vendored static assets from `static/` (PhotoSwipe, committed to the repo — keep them vendored and offline, no CDNs, since the primary will be a hotspot).
 - `cam_preview.py` — standalone browser camera diagnostic; do not run it alongside `cam_server.py` on the same Pi.
+- `pispot.py` — standalone hotspot TUI (NetworkManager config + client monitor), run under `sudo`. Needs current Textual from pip; apt's `python3-textual` (0.1.13) is too old and must not be installed. `apply()` pins the Hotspot profile below the uplink (`ipv4.never-default`, route-metric 700, dns-priority 200) and writes `/etc/sysctl.d/99-pispot.conf` (ip_forward) so sharing works over wlan0/eth0. Requires the Wi-Fi country code to be set on the host.
 
 ## Hardware-only, no dev loop
 
 - Pi 5 only: `picamera2`, `libcamera`, `gpiod` are Pi-only. Nothing can be imported, linted, or tested on a normal dev machine — do not try to run it or add CI/tests.
-- Validate by inspection only; `python3 -m py_compile cam_server.py cam_preview.py web_gallery.py` works for syntax.
+- Validate by inspection only; `python3 -m py_compile cam_server.py cam_preview.py web_gallery.py pispot.py` works for syntax.
 - `gpiod` import and setup are guarded and degrade gracefully — keep any GPIO failure from stopping camera service startup.
 
 ## Architecture

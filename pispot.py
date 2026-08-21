@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from time import strftime
 
 try:
@@ -32,6 +33,7 @@ from textual.widgets import (
 from textual import work
 
 PROFILE = "Hotspot"
+SYSCTL_CONF = Path("/etc/sysctl.d/99-pispot.conf")
 NEIGH_STATES = {"REACHABLE", "STALE", "DELAY", "PROBE"}
 BANDS = [("2.4 GHz (b/g/n)", "bg"), ("5 GHz (a/n/ac)", "a")]
 CHANNELS = {
@@ -98,6 +100,17 @@ def active_ip(iface):
     return ""
 
 
+def ensure_forwarding():
+    conf = "net.ipv4.ip_forward=1\n"
+    try:
+        if SYSCTL_CONF.read_text() == conf:
+            return
+        SYSCTL_CONF.write_text(conf)
+        _run("sysctl", "-w", "net.ipv4.ip_forward=1")
+    except OSError:
+        pass
+
+
 def apply(cfg, iface=None, name=PROFILE):
     if load_profile(name) is None:
         args = [
@@ -137,7 +150,14 @@ def apply(cfg, iface=None, name=PROFILE):
         cfg["psk"],
         "802-11-wireless-security.key-mgmt",
         "wpa-psk",
+        "ipv4.never-default",
+        "yes",
+        "ipv4.route-metric",
+        "700",
+        "ipv4.dns-priority",
+        "200",
     )
+    ensure_forwarding()
     _run("nmcli", "connection", "up", name)
 
 
