@@ -15,11 +15,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
     import gpiod
-    GPIO_ACTIVE = gpiod.Line.Value.ACTIVE
-except Exception:
+    GPIO_ACTIVE = gpiod.line.Value.ACTIVE
+except Exception as e:
     gpiod = None
     GPIO_ACTIVE = 0
-    print("gpiod failed to import")
+    print(f"gpiod failed to import: {e}")
 
 
 def load_env(path=".env"):
@@ -82,8 +82,8 @@ if GPIO_TRIGGER_PIN >= 0:
     else:
         try:
             settings = gpiod.LineSettings(
-                direction=gpiod.Line.Direction.INPUT,
-                bias=gpiod.Line.Bias.PULL_UP,
+                direction=gpiod.line.Direction.INPUT,
+                bias=gpiod.line.Bias.PULL_UP,
                 active_low=True
             )
             gpio_request = gpiod.request_lines(

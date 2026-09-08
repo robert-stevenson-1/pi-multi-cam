@@ -8,13 +8,14 @@ Install from `apt`, not pip: pip's `opencv-python` drags in numpy 2.x, which bre
 
 ```bash
 sudo apt update
-sudo apt install python3-picamera2 python3-opencv python3-gpiod
+sudo apt install python3-picamera2 python3-opencv
+sudo pip3 install gpiod --break-system-packages
 ```
 
 - `picamera2` (pre-installed on full Raspberry Pi OS images; `python3-picamera2` on Lite)
 - `python3-opencv` (`cv2`)
 - `numpy` (pulled in by the above)
-- `python3-gpiod` (GPIO button trigger; optional, degrades gracefully)
+- `gpiod` via pip (GPIO button trigger; optional, degrades gracefully) — `python3-gpiod` isn't in Raspbian's repos, and apt's libgpiod would be the old v1 API anyway; the pip package is the self-contained v2 bindings the code targets
 
 ## Architecture
 
