@@ -9,6 +9,7 @@ import json
 import select
 import sys
 import glob
+import shutil
 import threading
 import urllib.parse
 import urllib.request
@@ -189,6 +190,26 @@ class Primary:
             self.current_session = None
             self._save_sessions()
             return {"ok": True}
+
+    def session_delete(self, name, files=False):
+        with self.lock:
+            idx = next((i for i, s in enumerate(self.sessions) if s["name"] == name), None)
+            if idx is None:
+                return {"ok": False, "error": "unknown session"}
+            s = self.sessions.pop(idx)
+            if self.current_session == name:
+                self.current_session = None
+            self._save_sessions()
+            removed = []
+            if files:
+                for b in s.get("batches", []):
+                    if not all(c.isalnum() or c == "_" for c in b):
+                        continue
+                    p = os.path.join(CAPTURES_DIR, b)
+                    if os.path.isdir(p):
+                        shutil.rmtree(p, ignore_errors=True)
+                        removed.append(b)
+            return {"ok": True, "removed_batches": removed}
 
     def session_status(self):
         with self.lock:
@@ -461,6 +482,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, primary.session_start(name))
             elif parsed.path == "/session/stop":
                 self._send_json(200, primary.session_stop())
+            elif parsed.path == "/session/delete":
+                name = qs.get("name", [""])[0]
+                files = qs.get("files", ["0"])[0] in ("1", "true")
+                self._send_json(200, primary.session_delete(name, files))
             else:
                 self._send_json(404, {"error": "not found"})
         else:

@@ -78,12 +78,11 @@ def gallery_cards_html(sections):
         """
 
     sections_html = []
-    for idx, (title, cardlist, is_session) in enumerate(sections):
+    for title, cardlist, is_session in sections:
         total_photos = sum(len(entries) for _, entries in cardlist)
         total_batches = len(cardlist)
         safe_title = urllib.parse.quote(title) if title else "ungrouped"
         session_key = f"sess_{safe_title}"
-        is_default_open = (idx == 0)
 
         batch_cards = []
         for name, entries in cardlist:
@@ -120,17 +119,25 @@ def gallery_cards_html(sections):
             )
 
         dl_session = ""
+        del_btn = ""
         if is_session and title:
             dl_session = (
                 f'<a class="btn-zip btn-session-zip" href="/zip/session/{urllib.parse.quote(title)}" onclick="event.stopPropagation()">'
                 f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Session ZIP</a>'
             )
-
-        open_attr = "open" if is_default_open else ""
-        open_cls = "is-open" if is_default_open else ""
+            del_btn = (
+                f'<span class="del-wrap" onclick="event.stopPropagation()">'
+                f'<button class="btn-zip btn-del" onclick="showDelConfirm(this)">Delete</button>'
+                f'<span class="del-confirm" hidden>'
+                f'<button class="btn-zip" onclick="deleteSession(this)">Keep files</button>'
+                f'<button class="btn-zip btn-del-files" onclick="deleteSession(this, true)">Delete files</button>'
+                f'<button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>'
+                f'</span>'
+                f'</span>'
+            )
 
         sections_html.append(
-            f'<details class="session-accordion {open_cls}" data-session-key="{session_key}" {open_attr}>'
+            f'<details class="session-accordion" data-session-key="{session_key}" data-session-name="{safe_title}">'
             f'<summary class="session-header">'
             f'<div class="session-header-left">'
             f'<span class="chevron"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>'
@@ -140,7 +147,7 @@ def gallery_cards_html(sections):
             f'<span class="meta-pill">{total_photos} photo{"s" if total_photos != 1 else ""}</span>'
             f'</div>'
             f'</div>'
-            f'<div class="session-header-right">{dl_session}</div>'
+            f'<div class="session-header-right">{dl_session}{del_btn}</div>'
             f'</summary>'
             f'<div class="session-body">'
             f'{"".join(batch_cards)}'
@@ -537,6 +544,32 @@ body {{
   font-size: 0.8rem;
   padding: 0.35rem 0.75rem;
 }}
+
+.btn-del {{
+  color: #b91c1c;
+  border-color: #fecaca;
+}}
+.btn-del:hover {{
+  color: #ffffff;
+  border-color: #dc2626;
+  background: #dc2626;
+}}
+.btn-del-files {{
+  color: #ffffff;
+  background: #dc2626;
+  border-color: #dc2626;
+}}
+.del-wrap {{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}}
+.del-confirm {{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}}
+.del-confirm[hidden], .btn-del[hidden] {{ display: none; }}
 
 .grid {{
   display: grid;
@@ -1050,6 +1083,35 @@ function stopSession() {{
     .catch(e => showToast('Session error: ' + e, 'error'));
 }}
 
+function showDelConfirm(btn) {{
+  const wrap = btn.parentElement;
+  btn.hidden = true;
+  wrap.querySelector('.del-confirm').hidden = false;
+}}
+
+function hideDelConfirm(btn) {{
+  const wrap = btn.closest('.del-wrap');
+  wrap.querySelector('.btn-del').hidden = false;
+  wrap.querySelector('.del-confirm').hidden = true;
+}}
+
+function deleteSession(btn, files) {{
+  const acc = btn.closest('.session-accordion');
+  const name = decodeURIComponent(acc.getAttribute('data-session-name'));
+  fetch('/session/delete?name=' + encodeURIComponent(name) + (files ? '&files=1' : ''), {{method: 'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (!d.ok) {{
+        showToast('Delete failed: ' + (d.error || ''), 'error');
+        return;
+      }}
+      showToast(files ? 'Session deleted, files removed.' : 'Session removed, captures kept.', 'success');
+      pollStatus();
+      setTimeout(() => refreshGallery(false), 400);
+    }})
+    .catch(e => showToast('Delete error: ' + e, 'error'));
+}}
+
 function pollStatus() {{
   fetch('/server-status')
     .then(r => r.json())
@@ -1148,7 +1210,7 @@ class Handler(SimpleHTTPRequestHandler):
         elif path == "/purge-secondaries":
             body = self._proxy("/purge-secondaries", timeout=60)
             self._send_json(200, {"ok": body.get("ok", False), "secondaries": body.get("secondaries", {})})
-        elif path in ("/session/start", "/session/stop"):
+        elif path in ("/session/start", "/session/stop", "/session/delete"):
             body = self._proxy(path + (f"?{qs}" if qs else ""), timeout=10)
             self._send_json(200, body)
         else:
@@ -1218,7 +1280,7 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             sessions = []
         sections = []
-        for s in sessions:
+        for s in reversed(sessions):
             cards = [(b, by_name.pop(b, [])) for b in s.get("batches", []) if b in by_name]
             if cards:
                 sections.append((s["name"], cards, True))
