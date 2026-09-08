@@ -8,6 +8,7 @@ import hashlib
 import json
 import select
 import sys
+import glob
 import threading
 import urllib.parse
 import urllib.request
@@ -81,13 +82,22 @@ if GPIO_TRIGGER_PIN >= 0:
         print("WARNING: gpiod not installed. GPIO trigger disabled.")
     else:
         try:
+            chip_path = None
+            for path in sorted(glob.glob("/dev/gpiochip*")):
+                try:
+                    with gpiod.Chip(path) as chip:
+                        chip.line_offset_from_id(f"GPIO{GPIO_TRIGGER_PIN}")
+                    chip_path = path
+                    break
+                except Exception:
+                    continue
             settings = gpiod.LineSettings(
                 direction=gpiod.line.Direction.INPUT,
                 bias=gpiod.line.Bias.PULL_UP,
                 active_low=True
             )
             gpio_request = gpiod.request_lines(
-                "/dev/gpiochip0",
+                chip_path or "/dev/gpiochip0",
                 consumer="cam-server-trigger",
                 config={GPIO_TRIGGER_PIN: settings},
             )
