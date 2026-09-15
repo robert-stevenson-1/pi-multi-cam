@@ -1149,7 +1149,7 @@ function pollStatus() {{
           if (v.up) {{
             return '<span class="live-pill online" title="' + v.addr + '"><span class="live-dot"></span> ' + k + ' (' + (v.cameras || 0) + ' cam)</span>';
           }} else {{
-            return '<span class="live-pill offline" title="' + v.addr + '"><span class="live-dot"></span> ' + k + ' Down</span>';
+            return '<span class="live-pill offline" title="' + v.addr + (v.error ? ' — ' + v.error : '') + '"><span class="live-dot"></span> ' + k + ' Down</span>';
           }}
         }}).join(' ');
       }} else {{
