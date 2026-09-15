@@ -540,6 +540,9 @@ def main():
                     primary.do_capture(remote=False)
                 else:
                     secondary_capture()
+        if not PRIMARY:
+            time.sleep(0.05)
+            continue
         ready, _, _ = select.select([sys.stdin], [], [], 0.05)
         if ready:
             line = sys.stdin.readline()
@@ -550,7 +553,7 @@ def main():
             if key == "q":
                 print("Quitting.")
                 break
-            elif key == "c" and PRIMARY:
+            elif key == "c":
                 primary.do_capture(remote=True)
 
     if gpio_request is not None:
