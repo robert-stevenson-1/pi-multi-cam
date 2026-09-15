@@ -503,6 +503,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": "not found"})
 
 
+def register_loop():
+    qs = urllib.parse.urlencode({"pi_id": PI_ID, "port": SECONDARY_PORT})
+    url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/register?{qs}"
+    while True:
+        try:
+            urllib.request.urlopen(url, data=b"", timeout=5)
+            print(f"{PI_ID}: registered with {PRIMARY_HOST}:{PRIMARY_PORT}")
+        except Exception as e:
+            print(f"WARNING: registration with primary failed: {e}")
+        time.sleep(30)
+
+
 def main():
     global primary
     primary = None
@@ -515,14 +527,8 @@ def main():
     else:
         server = ThreadingHTTPServer(("", SECONDARY_PORT), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        qs = urllib.parse.urlencode({"pi_id": PI_ID, "port": SECONDARY_PORT})
-        url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/register?{qs}"
-        try:
-            urllib.request.urlopen(url, data=b"", timeout=5)
-            print(f"Secondary mode ({PI_ID}). Registered with {PRIMARY_HOST}")
-        except Exception as e:
-            print(f"WARNING: registration with primary failed: {e}")
-        print(f"Secondary HTTP on :{SECONDARY_PORT}")
+        threading.Thread(target=register_loop, daemon=True).start()
+        print(f"Secondary mode ({PI_ID}). HTTP on :{SECONDARY_PORT}")
 
     gpio_debounce_until = 0
     while True:
