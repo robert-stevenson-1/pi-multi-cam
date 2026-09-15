@@ -25,6 +25,7 @@ def load_env(path=None):
 load_env()
 
 PORT = int(os.getenv("PORT", "8088"))
+CAPTURE_REFRESH_MS = int(os.getenv("CAPTURE_REFRESH_MS", "1000"))
 CAPTURES_DIR = os.getenv("CAPTURES_DIR", "captures")
 PRIMARY_HOST = os.getenv("PRIMARY_HOST", "127.0.0.1")
 PRIMARY_PORT = int(os.getenv("PRIMARY_PORT", "8080"))
@@ -974,7 +975,7 @@ function triggerCapture() {{
     .then(d => {{
       if (d.ok) {{
         showToast('Capture complete!', 'success');
-        setTimeout(() => refreshGallery(false), 500);
+        setTimeout(() => refreshGallery(false), {CAPTURE_REFRESH_MS});
       }} else {{
         showToast('Capture failed: ' + (d.error || 'Unknown error'), 'error');
       }}

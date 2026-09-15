@@ -46,7 +46,7 @@ Config is read from `.env` (loaded by both scripts at startup, fallback to in-co
 - `GPIO_TRIGGER_PIN`: BCM pin, `-1` disables; active-low, 0.5s software debounce.
 - `CAPTURES_DIR`: output directory.
 
-`web_gallery.py` knobs: `PORT`, `CAPTURES_DIR`, `PRIMARY_HOST`/`PRIMARY_PORT` (proxy target for controls; defaults to `127.0.0.1:8080`). `GET /server-status` combines the primary `/status` response with direct pings to each registered secondary's `/status`; the gallery header polls it every five seconds and shows a red `Primary Down` pill when the primary backend is unreachable. `cam_preview.py` uses its own `PREVIEW_PORT` (default `9090`) and `SIZE` (default `640x480`).
+`web_gallery.py` knobs: `PORT`, `CAPTURES_DIR`, `PRIMARY_HOST`/`PRIMARY_PORT` (proxy target for controls; defaults to `127.0.0.1:8080`), `CAPTURE_REFRESH_MS` (delay before the gallery auto-reloads after "Capture All", default 1000). `GET /server-status` combines the primary `/status` response with direct pings to each registered secondary's `/status`; the gallery header polls it every five seconds and shows a red `Primary Down` pill when the primary backend is unreachable. `cam_preview.py` uses its own `PREVIEW_PORT` (default `9090`) and `SIZE` (default `640x480`).
 
 ## Conventions
 
