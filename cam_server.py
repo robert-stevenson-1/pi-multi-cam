@@ -59,8 +59,14 @@ else:
     print(f"Invalid MODE: {MODE}")
     sys.exit(1)
 
+try:
+    camera_count = len(Picamera2.global_camera_info())
+except Exception as e:
+    print(f"Camera enumeration failed, probing 0-1: {e}")
+    camera_count = 2
+
 cameras = []
-for i in range(2):
+for i in range(camera_count):
     try:
         cam = Picamera2(i)
         config = cam.create_still_configuration()
