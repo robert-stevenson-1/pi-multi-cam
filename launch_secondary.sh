@@ -24,7 +24,7 @@ start_one() {
         echo "$svc already running (pid $(cat "$(pid_file "$svc")"))"
         return
     fi
-    nohup python3 "$svc.py" > "$(log_file "$svc")" 2>&1 &
+    nohup python3 -u "$svc.py" > "$(log_file "$svc")" 2>&1 &
     echo $! > "$(pid_file "$svc")"
     echo "$svc started (pid $(cat "$(pid_file "$svc")"))"
 }
