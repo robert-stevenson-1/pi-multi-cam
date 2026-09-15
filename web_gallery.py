@@ -123,7 +123,12 @@ def gallery_cards_html(sections):
 
         dl_session = ""
         del_btn = ""
+        cont_btn = ""
         if is_session and title:
+            cont_btn = (
+                f'<button class="btn-zip btn-session-zip" onclick="event.stopPropagation();continueSession(this)">'
+                f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> Continue</button>'
+            )
             dl_session = (
                 f'<a class="btn-zip btn-session-zip" href="/zip/session/{urllib.parse.quote(title)}" onclick="event.stopPropagation()">'
                 f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Session ZIP</a>'
@@ -150,7 +155,7 @@ def gallery_cards_html(sections):
             f'<span class="meta-pill">{total_photos} photo{"s" if total_photos != 1 else ""}</span>'
             f'</div>'
             f'</div>'
-            f'<div class="session-header-right">{dl_session}{del_btn}</div>'
+            f'<div class="session-header-right">{cont_btn}{dl_session}{del_btn}</div>'
             f'</summary>'
             f'<div class="session-body">'
             f'{"".join(batch_cards)}'
@@ -1066,6 +1071,22 @@ function startSession() {{
         setTimeout(() => refreshGallery(false), 500);
       }} else {{
         showToast('Start session failed: ' + (d.error || ''), 'error');
+      }}
+    }})
+    .catch(e => showToast('Session error: ' + e, 'error'));
+}}
+
+function continueSession(btn) {{
+  const acc = btn.closest('.session-accordion');
+  const name = decodeURIComponent(acc.getAttribute('data-session-name'));
+  fetch('/session/start?name=' + encodeURIComponent(name), {{method: 'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (d.ok) {{
+        showToast('Continuing session: ' + d.session, 'success');
+        pollStatus();
+      }} else {{
+        showToast('Continue failed: ' + (d.error || ''), 'error');
       }}
     }})
     .catch(e => showToast('Session error: ' + e, 'error'));

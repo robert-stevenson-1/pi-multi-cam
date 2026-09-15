@@ -181,10 +181,16 @@ class Primary:
         if not name or not all(c.isalnum() or c in "_- " for c in name):
             return {"ok": False, "error": "invalid session name"}
         with self.lock:
+            if self.current_session == name:
+                return {"ok": True, "session": name}
             if self.current_session:
                 return {"ok": False, "error": f"session '{self.current_session}' already active"}
+            s = next((s for s in self.sessions if s["name"] == name), None)
+            if s is None:
+                s = {"name": name, "created": time.time(), "active": True, "batches": []}
+                self.sessions.append(s)
+            s["active"] = True
             self.current_session = name
-            self.sessions.append({"name": name, "created": time.time(), "active": True, "batches": []})
             self._save_sessions()
             return {"ok": True, "session": name}
 
