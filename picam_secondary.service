@@ -1,0 +1,16 @@
+[Unit]
+Description=Pi Multi-Cam Secondary Launcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=pi
+WorkingDirectory=/home/pi/pi-multi-cam
+# This adds the 15-second delay before running the script
+ExecStartPre=/bin/sleep 15
+ExecStart=/home/pi/pi-multi-cam/launch_secondary.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
