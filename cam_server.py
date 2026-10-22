@@ -1,5 +1,5 @@
 from picamera2 import Picamera2
-from libcamera import controls
+from libcamera import controls, Transform
 import cv2
 import numpy as np
 import time
@@ -13,6 +13,7 @@ import shutil
 import threading
 import urllib.parse
 import urllib.request
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -49,6 +50,10 @@ AF_MODE = os.getenv("AF_MODE", "continuous")
 GPIO_TRIGGER_PIN = int(os.getenv("GPIO_TRIGGER_PIN", "19"))
 MAX_SECONDARIES = int(os.getenv("MAX_SECONDARIES", "3"))
 CAPTURES_DIR = os.getenv("CAPTURES_DIR", "captures")
+VID_RES = os.getenv("VID_RES", "1080")
+VID_FPS = int(os.getenv("VID_FPS", "30"))
+VID_QUALITY = os.getenv("VID_QUALITY", "medium")
+VID_DURATION = float(os.getenv("VID_DURATION", "0"))
 
 MODE = MODE.strip().lower()
 if MODE in ("p", "primary"):
@@ -116,6 +121,204 @@ if GPIO_TRIGGER_PIN >= 0:
             gpio_request = None
 
 capture_lock = threading.Lock()
+video_lock = threading.Lock()
+video_state = {"recording": False, "batch": None, "started": 0.0, "recs": [], "timer": None, "settings": None}
+
+VID_SIZES = {"1080": (1920, 1080), "720": (1280, 720)}
+VID_BITRATES = {"low": 4000000, "medium": 10000000, "high": 20000000}
+VIDEO_EXTENSIONS = (".mp4", ".h264")
+
+
+def normalise_video_settings(st):
+    res = str(st.get("res") or VID_RES)
+    if res not in VID_SIZES:
+        res = "1080"
+    try:
+        fps = int(st.get("fps") or VID_FPS)
+    except (TypeError, ValueError):
+        fps = VID_FPS
+    fps = 30 if fps > 15 else 15
+    quality = str(st.get("quality") or VID_QUALITY)
+    if quality not in VID_BITRATES:
+        quality = "medium"
+    try:
+        duration = float(st.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return {"res": res, "fps": max(1, fps), "quality": quality, "duration": max(0.0, duration)}
+
+
+def video_settings_from_qs(qs):
+    return normalise_video_settings({
+        "res": qs.get("res", [None])[0],
+        "fps": qs.get("fps", [None])[0],
+        "quality": qs.get("quality", [None])[0],
+        "duration": qs.get("dur", [None])[0],
+    })
+
+
+def video_encoder_factories():
+    factories = []
+    try:
+        from picamera2.encoders import H264Encoder
+        factories.append(lambda bitrate: H264Encoder(bitrate=bitrate))
+    except Exception as e:
+        print(f"H264Encoder unavailable: {e}")
+    try:
+        from picamera2.encoders import LibavH264Encoder
+        factories.append(lambda bitrate: LibavH264Encoder(bitrate=bitrate))
+    except Exception as e:
+        print(f"LibavH264Encoder unavailable: {e}")
+    return factories
+
+
+def video_output_factories(path_base):
+    from picamera2.outputs import FileOutput
+    factories = []
+    try:
+        from picamera2.outputs import FfmpegOutput
+        factories.append((path_base + ".mp4", lambda: FfmpegOutput(path_base + ".mp4")))
+    except Exception as e:
+        print(f"FfmpegOutput unavailable: {e}")
+    try:
+        from picamera2.outputs import PyavOutput
+        factories.append((path_base + ".mp4", lambda: PyavOutput(path_base + ".mp4")))
+    except Exception as e:
+        print(f"PyavOutput unavailable: {e}")
+    factories.append((path_base + ".h264", lambda: FileOutput(path_base + ".h264")))
+    return factories
+
+
+def start_cam_recording(cam, path_base, st):
+    size = VID_SIZES[st["res"]]
+    bitrate = VID_BITRATES[st["quality"]]
+    vid_ctrl = {"FrameRate": st["fps"]}
+    if AF_MODE == "continuous":
+        vid_ctrl["AfMode"] = controls.AfModeEnum.Continuous
+    cfg = cam.create_video_configuration(
+        main={"size": size},
+        buffer_count=4,
+        transform=Transform(hflip=1, vflip=1),
+        controls=vid_ctrl,
+    )
+    cam.stop()
+    cam.configure(cfg)
+    cam.start()
+    last_error = None
+    for enc_factory in video_encoder_factories():
+        for path, out_factory in video_output_factories(path_base):
+            try:
+                enc = enc_factory(bitrate)
+                cam.start_encoder(enc, out_factory())
+                print(f"Recording {path} ({enc.__class__.__name__})")
+                return cam, enc, path
+            except Exception as e:
+                last_error = e
+                print(f"WARNING: encoder/output attempt failed: {e}")
+    raise RuntimeError(f"no working video encoder/output combination: {last_error}")
+
+
+def restore_still_config(cam):
+    try:
+        cam.stop()
+        cam.configure(cam.create_still_configuration())
+        if AF_MODE == "continuous":
+            cam.set_controls({"AfMode": controls.AfModeEnum.Continuous})
+        else:
+            cam.set_controls({"AfMode": controls.AfModeEnum.Auto})
+        cam.start()
+    except Exception as e:
+        print(f"WARNING: camera restore to stills failed: {e}")
+
+
+def video_recording_start(batch_dir, st):
+    st = normalise_video_settings(st)
+    os.makedirs(batch_dir, exist_ok=True)
+    with capture_lock:
+        with video_lock:
+            if video_state["recording"]:
+                return {"ok": False, "error": "already recording"}
+            recs = []
+            try:
+                for idx, cam in enumerate(cameras):
+                    recs.append(start_cam_recording(
+                        cam, os.path.join(batch_dir, f"{PI_ID}_cam{idx}"), st))
+            except Exception as e:
+                for cam, enc, path in recs:
+                    try:
+                        cam.stop_encoder()
+                    except Exception:
+                        pass
+                for cam, enc, path in recs:
+                    restore_still_config(cam)
+                print(f"{PI_ID}: video start failed: {e}")
+                return {"ok": False, "error": str(e)}
+            video_state.update({
+                "recording": True,
+                "batch": os.path.basename(batch_dir),
+                "started": time.time(),
+                "recs": recs,
+                "settings": st,
+            })
+            if st["duration"] > 0:
+                timer = threading.Timer(st["duration"], video_recording_stop)
+                timer.daemon = True
+                timer.start()
+                video_state["timer"] = timer
+            print(f"{PI_ID}: recording {st['res']}p {st['fps']}fps {st['quality']} "
+                  f"to {video_state['batch']} ({len(recs)} camera(s))")
+            return {"ok": True, "batch": video_state["batch"], "settings": st, "cameras": len(recs)}
+
+
+def video_recording_stop():
+    with capture_lock:
+        with video_lock:
+            if not video_state["recording"]:
+                return {"ok": False, "error": "not recording"}
+            timer = video_state.get("timer")
+            if timer is not None:
+                timer.cancel()
+                video_state["timer"] = None
+            files = []
+            for cam, enc, path in video_state["recs"]:
+                try:
+                    cam.stop_encoder()
+                    files.append(path)
+                except Exception as e:
+                    print(f"WARNING: stop encoder failed: {e}")
+                restore_still_config(cam)
+            duration = time.time() - video_state["started"]
+            total = sum(os.path.getsize(f) for f in files if os.path.isfile(f))
+            batch = video_state["batch"]
+            settings = video_state["settings"]
+            video_state.update({"recording": False, "batch": None, "started": 0.0,
+                                "recs": [], "settings": None})
+            print(f"{PI_ID}: recording stopped after {duration:.1f}s "
+                  f"({len(files)} file(s), {total / 1048576:.1f} MB)")
+            return {"ok": True, "batch": batch, "files": [os.path.basename(f) for f in files],
+                    "duration": duration, "settings": settings}
+
+
+def video_upload_thumb(path):
+    cap = None
+    try:
+        cap = cv2.VideoCapture(path)
+        if cap.isOpened():
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                h, w = frame.shape[:2]
+                tw = 480
+                th = max(1, int(h * tw / w))
+                cv2.imwrite(path.rsplit(".", 1)[0] + "_thumb.jpg", cv2.resize(frame, (tw, th)))
+    except Exception as e:
+        print(f"WARNING: video thumb failed: {e}")
+    finally:
+        if cap is not None:
+            cap.release()
+
+
+def valid_upload_name(fname):
+    return bool(re.match(r"^[A-Za-z0-9_-]+\.(jpg|mp4|h264)$", fname or ""))
 
 
 def grab_frames():
@@ -157,6 +360,8 @@ class Primary:
         self.lock = threading.Lock()
         self.secondaries = {}
         self.current_batch = None
+        self.current_video_batch = None
+        self.capture_mode = "photo"
         self.session_path = os.path.join(CAPTURES_DIR, "sessions.json")
         self.sessions = []
         self.current_session = None
@@ -176,7 +381,7 @@ class Primary:
         with open(self.session_path, "w") as f:
             json.dump(self.sessions, f, indent=1)
 
-    def session_start(self, name):
+    def session_start(self, name, kind="image"):
         name = name.strip()
         if not name or not all(c.isalnum() or c in "_- " for c in name):
             return {"ok": False, "error": "invalid session name"}
@@ -187,12 +392,15 @@ class Primary:
                 return {"ok": False, "error": f"session '{self.current_session}' already active"}
             s = next((s for s in self.sessions if s["name"] == name), None)
             if s is None:
-                s = {"name": name, "created": time.time(), "active": True, "batches": []}
+                s = {"name": name, "kind": kind if kind in ("image", "video") else "image",
+                     "created": time.time(), "active": True, "batches": []}
                 self.sessions.append(s)
+            elif s.get("kind", "image") != kind:
+                return {"ok": False, "error": f"session '{name}' is a {s.get('kind', 'image')} session"}
             s["active"] = True
             self.current_session = name
             self._save_sessions()
-            return {"ok": True, "session": name}
+            return {"ok": True, "session": name, "kind": s.get("kind", "image")}
 
     def session_stop(self):
         with self.lock:
@@ -245,20 +453,25 @@ class Primary:
                 self.current_batch = None
             return {"ok": True, "removed_batch": name}
 
-    def new_batch(self):
+    def new_batch(self, kind="image"):
         name = batch_stamp()
         batch = os.path.join(CAPTURES_DIR, name)
         os.makedirs(batch, exist_ok=True)
         if self.current_session:
             for s in self.sessions:
                 if s["name"] == self.current_session:
-                    s["batches"].append(name)
+                    if s.get("kind", "image") == kind:
+                        s["batches"].append(name)
+                        self._save_sessions()
                     break
-            self._save_sessions()
         return batch
 
     def do_capture(self, remote=False):
         with capture_lock:
+            with video_lock:
+                if video_state["recording"]:
+                    print("Photo capture refused: video recording in progress")
+                    return {"ok": False, "error": "video recording in progress"}
             with self.lock:
                 self.current_batch = self.new_batch()
                 batch = self.current_batch
@@ -266,8 +479,10 @@ class Primary:
             for idx, frame in enumerate(frames):
                 write_frame(os.path.join(batch, f"{PI_ID}_cam{idx}.jpg"), frame)
             print(f"Captured {len(frames)} local frame(s) in {os.path.basename(batch)}")
+            result = {"ok": True, "batch": os.path.basename(batch)}
         if remote:
             self.fire_secondaries(os.path.basename(batch))
+        return result
 
     def fire_secondaries(self, batch):
         threads = []
@@ -285,7 +500,76 @@ class Primary:
         except Exception as e:
             print(f"WARNING: secondary {pi_id} trigger failed: {e}")
 
-    def handle_upload(self, pi_id, cam_idx, data, batch=None):
+    def fire_secondaries_video(self, batch, st):
+        qs = urllib.parse.urlencode({
+            "batch": batch, "res": st["res"], "fps": st["fps"],
+            "quality": st["quality"], "dur": st["duration"],
+        })
+        threads = []
+        for pi_id, (ip, port) in list(self.secondaries.items()):
+            url = f"http://{ip}:{port}/video/start?{qs}"
+            t = threading.Thread(
+                target=self._fanout_get, args=(pi_id, url, 5), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=6)
+
+    def fire_secondaries_video_stop(self):
+        threads = []
+        for pi_id, (ip, port) in list(self.secondaries.items()):
+            url = f"http://{ip}:{port}/video/stop"
+            t = threading.Thread(
+                target=self._fanout_get, args=(pi_id, url, 5), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=6)
+
+    def _fanout_get(self, pi_id, url, timeout):
+        try:
+            urllib.request.urlopen(url, timeout=timeout)
+        except Exception as e:
+            print(f"WARNING: secondary {pi_id} video call failed: {e}")
+
+    def _attach_video_settings(self, batch_name, st):
+        with self.lock:
+            for s in self.sessions:
+                if batch_name in s.get("batches", []):
+                    s["video_settings"] = st
+                    self._save_sessions()
+                    break
+
+    def video_start(self, remote=False, st=None):
+        st = normalise_video_settings(st or {})
+        with video_lock:
+            if video_state["recording"]:
+                return {"ok": False, "error": "already recording"}
+        batch = self.new_batch("video")
+        self.current_video_batch = batch
+        res = video_recording_start(batch, st)
+        res = video_recording_start(batch, st)
+        if not res.get("ok"):
+            with self.lock:
+                try:
+                    if not os.listdir(batch):
+                        os.rmdir(batch)
+                except OSError:
+                    pass
+            return res
+        self._attach_video_settings(os.path.basename(batch), st)
+        if remote:
+            self.fire_secondaries_video(os.path.basename(batch), st)
+        return res
+
+    def video_stop(self, remote=False):
+        res = video_recording_stop()
+        if res.get("ok") and remote:
+            self.fire_secondaries_video_stop()
+        return res
+
+    def handle_upload(self, pi_id, cam_idx, data, batch=None, kind="image", fname=None):
+        ext = ".mp4" if kind == "video" else ".jpg"
         with self.lock:
             if batch:
                 batch_dir = os.path.join(CAPTURES_DIR, batch)
@@ -293,16 +577,23 @@ class Primary:
             elif self.current_batch is None:
                 self.current_batch = self.new_batch()
                 print("No active batch; created from secondary upload")
-            path = os.path.join(batch_dir if batch else self.current_batch, f"{pi_id}_cam{cam_idx}.jpg")
+            if fname and valid_upload_name(fname):
+                name = fname
+            else:
+                name = f"{pi_id}_cam{cam_idx}{ext}"
+            path = os.path.join(batch_dir if batch else self.current_batch, name)
         with open(path, "wb") as f:
             f.write(data)
-        frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if frame is not None:
-            h, w = frame.shape[:2]
-            tw = 480
-            th = max(1, int(h * tw / w))
-            cv2.imwrite(path[:-4] + "_thumb.jpg", cv2.resize(frame, (tw, th)))
-        print(f"Saved {pi_id}_cam{cam_idx}.jpg")
+        if kind == "video":
+            video_upload_thumb(path)
+        else:
+            frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is not None:
+                h, w = frame.shape[:2]
+                tw = 480
+                th = max(1, int(h * tw / w))
+                cv2.imwrite(path[:-4] + "_thumb.jpg", cv2.resize(frame, (tw, th)))
+        print(f"Saved {name}")
 
     def sync_secondaries(self):
         results = {}
@@ -371,6 +662,62 @@ def secondary_capture(batch=None):
         print(f"{PI_ID}: saved {len(frames)} frame(s) to {batch}")
 
 
+def upload_capture_file(local_dir, fname):
+    path = os.path.join(local_dir, fname)
+    if os.path.exists(path + ".ok"):
+        return True
+    with open(path, "rb") as f:
+        data = f.read()
+    stem = fname.rsplit(".", 1)[0]
+    pi_id, cam_idx = PI_ID, 0
+    if "_cam" in stem:
+        pi, _, idx = stem.rpartition("_cam")
+        if pi and idx.isdigit():
+            pi_id, cam_idx = pi, int(idx)
+    kind = "video" if fname.endswith(VIDEO_EXTENSIONS) else "image"
+    qs = urllib.parse.urlencode({
+        "pi_id": pi_id, "cam_idx": cam_idx, "batch": os.path.basename(local_dir),
+        "kind": kind, "fname": fname,
+    })
+    url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/upload?{qs}"
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "video/mp4" if kind == "video" else "image/jpeg"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=300)
+        with open(path + ".ok", "w") as f:
+            f.write("ok")
+        return True
+    except Exception as e:
+        print(f"WARNING: upload {fname} failed: {e}")
+        return False
+
+
+def secondary_video_start(batch, st):
+    def work():
+        res = video_recording_start(os.path.join(CAPTURES_DIR, batch), st)
+        if not res.get("ok"):
+            print(f"{PI_ID}: video start failed: {res.get('error')}")
+    threading.Thread(target=work, daemon=True).start()
+
+
+def secondary_video_stop():
+    def work():
+        res = video_recording_stop()
+        if not res.get("ok"):
+            print(f"{PI_ID}: video stop failed: {res.get('error')}")
+            return
+        batch = res.get("batch")
+        local_dir = os.path.join(CAPTURES_DIR, batch)
+        for fname in res.get("files", []):
+            if upload_capture_file(local_dir, fname):
+                print(f"{PI_ID}: uploaded {batch}/{fname}")
+        print(f"{PI_ID}: video {batch} stopped and saved ({res.get('duration', 0):.1f}s)")
+    threading.Thread(target=work, daemon=True).start()
+
+
 def sync_push():
     pushed = 0
     failed = 0
@@ -380,28 +727,13 @@ def sync_push():
             if not os.path.isdir(batch_dir):
                 continue
             for fname in sorted(os.listdir(batch_dir)):
-                if not fname.endswith(".jpg") or os.path.exists(os.path.join(batch_dir, fname) + ".ok"):
+                if fname.endswith("_thumb.jpg"):
                     continue
-                with open(os.path.join(batch_dir, fname), "rb") as f:
-                    data = f.read()
-                stem = fname[:-4]
-                pi_id, cam_idx = PI_ID, 0
-                if "_cam" in stem:
-                    pi, _, idx = stem.rpartition("_cam")
-                    if pi and idx.isdigit():
-                        pi_id, cam_idx = pi, int(idx)
-                qs = urllib.parse.urlencode({"pi_id": pi_id, "cam_idx": cam_idx, "batch": name})
-                url = f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/upload?{qs}"
-                req = urllib.request.Request(
-                    url, data=data, headers={"Content-Type": "image/jpeg"}, method="POST"
-                )
-                try:
-                    urllib.request.urlopen(req, timeout=10)
-                    with open(os.path.join(batch_dir, fname) + ".ok", "w") as f:
-                        f.write("ok")
+                if not fname.endswith(".jpg") and not fname.endswith(VIDEO_EXTENSIONS):
+                    continue
+                if upload_capture_file(batch_dir, fname):
                     pushed += 1
-                except Exception as e:
-                    print(f"WARNING: sync upload {name}/{fname} failed: {e}")
+                else:
                     failed += 1
     print(f"{PI_ID}: sync pushed {pushed}, failed {failed}")
     return {"pushed": pushed, "failed": failed}
@@ -447,11 +779,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/status":
                 with primary.lock:
                     secs = {k: f"{ip}:{port}" for k, (ip, port) in primary.secondaries.items()}
+                with video_lock:
+                    video = {
+                        "recording": video_state["recording"],
+                        "batch": video_state["batch"],
+                        "started": video_state["started"],
+                        "settings": video_state["settings"],
+                    }
                 self._send_json(200, {
                     "pi_id": PI_ID,
                     "mode": "primary",
+                    "capture_mode": primary.capture_mode,
                     "cameras": len(cameras),
                     "session": primary.current_session,
+                    "video": video,
                     "secondaries": secs,
                 })
             else:
@@ -462,8 +803,21 @@ class Handler(BaseHTTPRequestHandler):
             batch = qs.get("batch", [None])[0]
             threading.Thread(target=secondary_capture, args=(batch,), daemon=True).start()
             self._send_json(200, {"ok": True})
+        elif path == "/video/start":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            batch = (qs.get("batch", [None])[0] or "").strip()
+            if not batch or not all(c.isalnum() or c == "_" for c in batch):
+                self._send_json(400, {"error": "invalid batch"})
+                return
+            secondary_video_start(batch, video_settings_from_qs(qs))
+            self._send_json(200, {"ok": True})
+        elif path == "/video/stop":
+            secondary_video_stop()
+            self._send_json(200, {"ok": True})
         elif path == "/status":
-            self._send_json(200, {"pi_id": PI_ID, "cameras": len(cameras)})
+            with video_lock:
+                recording = video_state["recording"]
+            self._send_json(200, {"pi_id": PI_ID, "cameras": len(cameras), "recording": recording})
         elif path == "/sync":
             self._send_json(200, sync_push())
         else:
@@ -491,16 +845,51 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 data = self.rfile.read(length) if length else b""
                 pi_id = qs.get("pi_id", ["?"])[0]
-                cam_idx = int(qs.get("cam_idx", ["0"])[0])
+                try:
+                    cam_idx = int(qs.get("cam_idx", ["0"])[0])
+                except ValueError:
+                    cam_idx = 0
                 batch = qs.get("batch", [None])[0]
+                kind = qs.get("kind", ["image"])[0]
+                if kind not in ("image", "video"):
+                    kind = "image"
+                fname = qs.get("fname", [None])[0]
+                if fname and not valid_upload_name(fname):
+                    self._send_json(400, {"error": "invalid filename"})
+                    return
                 if batch and not all(c.isalnum() or c == "_" for c in batch):
                     self._send_json(400, {"error": "invalid batch"})
                     return
-                primary.handle_upload(pi_id, cam_idx, data, batch)
+                primary.handle_upload(pi_id, cam_idx, data, batch, kind, fname)
                 self._send_json(200, {"ok": True})
             elif parsed.path == "/remote-capture":
-                primary.do_capture(remote=True)
-                self._send_json(200, {"ok": True, "batch": os.path.basename(primary.current_batch)})
+                body = primary.do_capture(remote=True)
+                response = {"ok": body.get("ok", False)}
+                if body.get("error"):
+                    response["error"] = body["error"]
+                if body.get("batch"):
+                    response["batch"] = body["batch"]
+                self._send_json(200, response)
+            elif parsed.path == "/video/start":
+                st = video_settings_from_qs(qs)
+                body = primary.video_start(remote=True, st=st)
+                self._send_json(200, body)
+            elif parsed.path == "/video/stop":
+                self._send_json(200, primary.video_stop(remote=True))
+            elif parsed.path == "/mode":
+                mode = qs.get("mode", ["photo"])[0].strip().lower()
+                if mode not in ("photo", "video"):
+                    self._send_json(400, {"error": "invalid mode"})
+                    return
+                with primary.lock:
+                    primary.capture_mode = mode
+                self._send_json(200, {"ok": True, "capture_mode": mode})
+            elif parsed.path == "/session/start":
+                name = qs.get("name", [""])[0]
+                kind = qs.get("kind", ["image"])[0]
+                if kind not in ("image", "video"):
+                    kind = "image"
+                self._send_json(200, primary.session_start(name, kind))
             elif parsed.path == "/sync":
                 results = primary.sync_secondaries()
                 self._send_json(200, {"ok": True, "secondaries": results})
@@ -562,7 +951,15 @@ def main():
                 gpio_debounce_until = time.time() + 0.5
                 print("GPIO trigger pressed")
                 if PRIMARY:
-                    primary.do_capture(remote=False)
+                    if primary.capture_mode == "video":
+                        with video_lock:
+                            recording = video_state["recording"]
+                        if recording:
+                            primary.video_stop(remote=True)
+                        else:
+                            primary.video_start(remote=True)
+                    else:
+                        primary.do_capture(remote=False)
                 else:
                     secondary_capture()
         if not PRIMARY:
@@ -578,6 +975,15 @@ def main():
             if key == "q":
                 print("Quitting.")
                 break
+            elif key == "v":
+                with video_lock:
+                    recording = video_state["recording"]
+                if recording:
+                    primary.video_stop(remote=True)
+                else:
+                    primary.video_start(remote=True)
+            elif key == "x":
+                primary.video_stop(remote=True)
             elif key == "c":
                 primary.do_capture(remote=True)
 
