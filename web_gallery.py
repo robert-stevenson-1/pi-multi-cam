@@ -168,9 +168,10 @@ def gallery_cards_html(sections):
             )
 
         sections_html.append(
-            f'<details class="session-accordion" data-session-key="{session_key}" data-session-name="{safe_title}" data-session-created="{created}">'
+            f'<details class="session-accordion" data-session-key="{session_key}" data-session-name="{safe_title}" data-session-created="{created}" data-is-session="{1 if is_session and title else 0}">'
             f'<summary class="session-header">'
             f'<div class="session-header-left">'
+            f'<label class="sel-check"><input type="checkbox" class="sel-sess" data-name="{safe_title}" onclick="event.stopPropagation()"></label>'
             f'<span class="chevron"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>'
             f'<span class="session-title">{title if title else "Ungrouped Captures"}</span>'
             f'<div class="session-meta-pills">'
@@ -432,6 +433,38 @@ body {{
 .select-sort:focus {{
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}}
+
+.sel-check {{
+  display: none;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  touch-action: manipulation;
+}}
+.sel-check input[type="checkbox"] {{
+  display: block;
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}}
+body.select-mode .sel-check {{
+  display: inline-flex;
+}}
+body.select-mode .session-accordion {{
+  border-color: var(--border-strong);
+}}
+.btn-batch-dl {{
+  font-size: 0.8rem;
+  padding: 0.35rem 0.75rem;
+}}
+.btn-batch-dl:disabled {{
+  opacity: 0.5;
+  cursor: not-allowed;
 }}
 
 .btn-text {{
@@ -936,6 +969,10 @@ figcaption {{
       <button class="btn-text" onclick="toggleAllAccordions(true)">Expand All</button>
       <span style="color:var(--border-strong)">·</span>
       <button class="btn-text" onclick="toggleAllAccordions(false)">Collapse All</button>
+      <span style="color:var(--border-strong)">·</span>
+      <button class="btn-text" id="btnSelectMode" onclick="toggleSelectMode()">Select</button>
+      <button class="btn-text" id="btnSelectAllBtn" onclick="toggleSelectAll()" hidden>Select All</button>
+      <button class="btn btn-primary btn-batch-dl" id="btnBatchDl" onclick="downloadSelected()" hidden>Download Selected (0)</button>
     </div>
   </div>
 
@@ -1102,6 +1139,50 @@ function initSortControls() {{
   document.getElementById('selSortBatches').value = sortPrefs.batches;
   document.getElementById('selSortImages').value = sortPrefs.images;
 }}
+
+function toggleSelectMode() {{
+  document.body.classList.toggle('select-mode');
+  const on = document.body.classList.contains('select-mode');
+  document.getElementById('btnSelectAllBtn').hidden = !on;
+  if (!on) {{
+    document.querySelectorAll('.sel-sess').forEach(cb => {{ cb.checked = false; }});
+  }}
+  updateBatchDl();
+}}
+
+function toggleSelectAll() {{
+  const boxes = document.querySelectorAll('.sel-sess');
+  const all = Array.from(boxes).every(cb => cb.checked);
+  boxes.forEach(cb => {{ cb.checked = !all; }});
+  updateBatchDl();
+}}
+
+function updateBatchDl() {{
+  const n = document.querySelectorAll('.sel-sess:checked').length;
+  const btn = document.getElementById('btnBatchDl');
+  btn.hidden = n === 0;
+  btn.textContent = 'Download Selected (' + n + ')';
+  btn.disabled = n === 0;
+}}
+
+function downloadSelected() {{
+  const sessions = [];
+  const batches = [];
+  document.querySelectorAll('.sel-sess:checked').forEach(cb => {{
+    const name = decodeURIComponent(cb.getAttribute('data-name'));
+    const enc = encodeURIComponent(name);
+    (cb.getAttribute('data-is-session') === '1' ? sessions : batches).push(enc);
+  }});
+  if (!sessions.length && !batches.length) return;
+  const url = '/zip/multi?sessions=' + sessions.join(',') + '&batches=' + batches.join(',');
+  window.location.assign(url);
+}}
+
+document.addEventListener('change', e => {{
+  if (e.target && e.target.classList && e.target.classList.contains('sel-sess')) {{
+    updateBatchDl();
+  }}
+}});
 
 function refreshGallery(showToastMsg = false) {{
   const openKeys = getOpenAccordionKeys();
@@ -1372,7 +1453,7 @@ class Handler(SimpleHTTPRequestHandler):
         elif path.startswith("/static/"):
             self._serve_static()
         elif path.startswith("/zip/"):
-            self._serve_zip(urllib.parse.unquote(path[len("/zip/"):]))
+            self._serve_zip(urllib.parse.unquote(path[len("/zip/"):]), query)
         else:
             super().do_GET()
 
@@ -1502,21 +1583,30 @@ class Handler(SimpleHTTPRequestHandler):
                 return s.get("batches", [])
         return []
 
-    def _serve_zip(self, target):
-        if target.startswith("session/"):
+    def _serve_zip(self, target, query=None):
+        groups = []
+        if target == "multi":
+            raw_s = (query or {}).get("sessions", [""])[0]
+            raw_b = (query or {}).get("batches", [""])[0]
+            for sname in [urllib.parse.unquote(n) for n in raw_s.split(",") if n]:
+                groups.extend((b, "sessions/" + sname) for b in self._session_batches(sname))
+            groups.extend((urllib.parse.unquote(n), "batches") for n in raw_b.split(",") if n)
+            dlname = "selected-captures.zip"
+        elif target.startswith("session/"):
             names = self._session_batches(target[len("session/"):])
             dlname = target.replace("/", "_") + ".zip"
+            groups.extend((n, "sessions/" + target[len("session/"):]) for n in names)
         else:
-            names = [target]
+            groups.append((target, ""))
             dlname = target + ".zip"
         folders = []
-        for n in names:
+        for n, prefix in groups:
             if not all(c.isalnum() or c == "_" for c in n):
                 self.send_error(400)
                 return
             full = os.path.join(CAPTURES_DIR, n)
             if os.path.isdir(full):
-                folders.append(full)
+                folders.append((full, prefix))
         if not folders:
             self.send_error(404)
             return
@@ -1524,12 +1614,12 @@ class Handler(SimpleHTTPRequestHandler):
         os.close(fd)
         try:
             with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
-                for folder in folders:
+                for folder, prefix in folders:
                     for fname in sorted(os.listdir(folder)):
                         if fname.endswith(".jpg") and not fname.endswith("_thumb.jpg"):
                             zf.write(
                                 os.path.join(folder, fname),
-                                arcname=os.path.join(os.path.basename(folder), fname),
+                                arcname=os.path.join(prefix, os.path.basename(folder), fname),
                             )
             size = os.path.getsize(tmp)
             self.send_response(200)
