@@ -60,3 +60,4 @@ Config is read from `.env` (loaded by both scripts at startup, fallback to in-co
 - Secondaries store captures locally and write `<file>.ok` after a successful upload; `GET /sync` pushes everything missing a marker. Sync markers are plain files next to the image.
 - `web_gallery.py` is pure stdlib (runs on any machine); `cam_server.py` imports the Pi-only camera stack. Keep `web_gallery.py` importable/testable off-device — the gallery was verified with a local run + browser.
 - No comments in code, no tests, no external instruction files.
+- Work with incremental git commits: one commit per logical change, made as each unit is complete and verified, with short imperative messages. Never commit unrelated churn or generated artifacts alongside it.
