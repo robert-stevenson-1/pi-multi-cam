@@ -136,7 +136,7 @@ def gallery_cards_html(sections):
                 f'</div>'
                 f'<figcaption><span class="fname" title="{img}">{img}</span>'
                 f'<a class="btn-save" href="{name}/{img}" download title="Download file">'
-                f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Save</a>'
+                f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> <span class="save-label">Save</span></a>'
                 f'</figcaption></figure>'
                 for img, thumb, w, h in entries
             )
@@ -235,6 +235,7 @@ def gallery_html(sections):
 }}
 
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+[hidden] {{ display: none !important; }}
 body {{
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg-page);
@@ -872,6 +873,50 @@ figcaption {{
   to {{ transform: scale(1); opacity: 1; }}
 }}
 
+.mobile-bar {{
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem calc(0.6rem + env(safe-area-inset-bottom));
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border-subtle);
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
+}}
+.btn-capture-mobile {{
+  flex: 1;
+  padding: 0.95rem 1rem;
+  font-size: 1rem;
+  border-radius: var(--radius-md);
+}}
+.overflow-wrap {{
+  position: relative;
+}}
+.overflow-menu {{
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+  background: #ffffff;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.5rem;
+  box-shadow: var(--shadow-lg);
+  min-width: 200px;
+}}
+.overflow-menu .btn {{
+  justify-content: flex-start;
+}}
+
 .modal-box h3 {{
   font-size: 1.15rem;
   font-weight: 700;
@@ -904,6 +949,125 @@ figcaption {{
 @keyframes spin {{
   to {{ transform: rotate(360deg); }}
 }}
+
+@media (max-width: 640px) {{
+  body {{
+    padding-bottom: 5.75rem;
+    -webkit-tap-highlight-color: transparent;
+  }}
+  .btn, .btn-zip, .btn-save, .summary, summary, .select-sort, .btn-text {{
+    touch-action: manipulation;
+  }}
+  .app-header {{
+    background: rgba(255, 255, 255, 0.97);
+  }}
+  .header-container {{
+    padding: 0.6rem 0.75rem;
+    gap: 0.5rem;
+  }}
+  .app-title {{
+    font-size: 1.05rem;
+  }}
+  .status-pills-bar {{
+    gap: 0.3rem;
+  }}
+  .live-pill {{
+    font-size: 0.68rem;
+    padding: 0.2rem 0.5rem;
+  }}
+  .controls-bar {{
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }}
+  .actions-group {{
+    display: none;
+  }}
+  .session-form-group {{
+    justify-content: space-between;
+  }}
+  .input-text {{
+    font-size: 16px;
+    min-width: 0;
+    flex: 1;
+  }}
+  .btn {{
+    min-height: 44px;
+  }}
+  .main-content {{
+    margin-top: 1rem;
+    padding: 0 0.6rem;
+  }}
+  .gallery-subbar {{
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }}
+  .view-controls {{
+    gap: 0.4rem;
+  }}
+  .grid {{
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }}
+  .dev-badge {{
+    font-size: 0.6rem;
+    padding: 0.15rem 0.35rem;
+  }}
+  .thumb-overlay {{
+    display: none;
+  }}
+  figcaption {{
+    padding: 0.35rem 0.45rem;
+    gap: 0.3rem;
+  }}
+  .fname {{
+    max-width: none;
+    flex: 1;
+    min-width: 0;
+    font-size: 0.62rem;
+  }}
+  .btn-save .save-label {{
+    display: none;
+  }}
+  .btn-save {{
+    padding: 0.3rem;
+  }}
+  .batch-card {{
+    padding: 0.6rem;
+  }}
+  .batch-header {{
+    margin-bottom: 0.6rem;
+  }}
+  .session-body {{
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }}
+  .session-header {{
+    padding: 0.7rem 0.75rem;
+  }}
+  .session-header-right {{
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }}
+  .toast-container {{
+    bottom: 5.75rem;
+    left: 0.75rem;
+    right: 0.75rem;
+  }}
+  .toast {{
+    min-width: 0;
+    max-width: none;
+  }}
+  .modal-backdrop {{
+    padding: 0.75rem;
+  }}
+  .modal-box {{
+    padding: 1.1rem;
+  }}
+  .mobile-bar {{
+    display: flex;
+  }}
+}}
 </style>
 </head>
 <body>
@@ -930,11 +1094,11 @@ figcaption {{
 
     <div class="controls-bar">
       <div class="actions-group">
-        <button class="btn btn-primary" id="btnCapture" onclick="triggerCapture()">
+        <button class="btn btn-primary" id="btnCapture" onclick="triggerCapture(this)">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
           <span>Capture All</span>
         </button>
-        <button class="btn" id="btnSync" onclick="triggerSync()">
+        <button class="btn" id="btnSync" onclick="triggerSync(this)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
           <span>Sync Now</span>
         </button>
@@ -1000,6 +1164,26 @@ figcaption {{
     <div class="modal-actions">
       <button class="btn" onclick="closePurgeModal()">Cancel</button>
       <button class="btn btn-primary" style="background:var(--accent-danger);border-color:var(--accent-danger);" id="btnConfirmPurge" onclick="confirmPurge()">Delete Captures</button>
+    </div>
+  </div>
+</div>
+
+<div class="mobile-bar" id="mobileBar">
+  <button class="btn btn-primary btn-capture-mobile" id="btnCaptureM" onclick="triggerCapture(this)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
+    <span>Capture All</span>
+  </button>
+  <div class="overflow-wrap">
+    <button class="btn btn-icon-only" onclick="toggleOverflow(event)">&nbsp;&#8942;&nbsp;</button>
+    <div class="overflow-menu" id="overflowMenu" hidden>
+      <button class="btn" onclick="triggerSync(this); toggleOverflow(event)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+        Sync Now
+      </button>
+      <button class="btn btn-danger" onclick="openPurgeModal()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        Purge Secondaries
+      </button>
     </div>
   </div>
 </div>
@@ -1196,6 +1380,19 @@ document.addEventListener('change', e => {{
   }}
 }});
 
+function toggleOverflow(e) {{
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('overflowMenu');
+  menu.hidden = !menu.hidden;
+}}
+
+document.addEventListener('click', e => {{
+  const menu = document.getElementById('overflowMenu');
+  if (menu && !menu.hidden && !e.target.closest('.overflow-wrap')) {{
+    menu.hidden = true;
+  }}
+}});
+
 function refreshGallery(showToastMsg = false) {{
   const openKeys = getOpenAccordionKeys();
   return fetch('/?partial=1')
@@ -1214,8 +1411,8 @@ function refreshGallery(showToastMsg = false) {{
     }});
 }}
 
-function triggerCapture() {{
-  const btn = document.getElementById('btnCapture');
+function triggerCapture(btn) {{
+  btn = btn || document.getElementById('btnCapture');
   const original = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> <span>Capturing...</span>';
@@ -1237,8 +1434,8 @@ function triggerCapture() {{
     }});
 }}
 
-function triggerSync() {{
-  const btn = document.getElementById('btnSync');
+function triggerSync(btn) {{
+  btn = btn || document.getElementById('btnSync');
   const original = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner" style="border-top-color:var(--text-main)"></span> <span>Syncing...</span>';
