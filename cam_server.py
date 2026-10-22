@@ -779,6 +779,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/status":
                 with primary.lock:
                     secs = {k: f"{ip}:{port}" for k, (ip, port) in primary.secondaries.items()}
+                    skind = None
+                    if primary.current_session:
+                        skind = next((s.get("kind", "image") for s in primary.sessions
+                                      if s["name"] == primary.current_session), None)
                 with video_lock:
                     video = {
                         "recording": video_state["recording"],
@@ -792,6 +796,7 @@ class Handler(BaseHTTPRequestHandler):
                     "capture_mode": primary.capture_mode,
                     "cameras": len(cameras),
                     "session": primary.current_session,
+                    "session_kind": skind,
                     "video": video,
                     "secondaries": secs,
                 })
