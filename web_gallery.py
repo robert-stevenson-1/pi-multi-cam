@@ -114,6 +114,17 @@ def gallery_cards_html(sections):
         for name, entries in cardlist:
             formatted_time, hsh = format_batch_display(name)
             hsh_badge = f'<span class="hash-tag">{hsh}</span>' if hsh else ""
+            del_batch = ""
+            if not is_session:
+                del_batch = (
+                    f'<span class="del-wrap">'
+                    f'<button class="btn-zip btn-del" onclick="showDelConfirm(this)">Delete</button>'
+                    f'<span class="del-confirm" hidden>'
+                    f'<button class="btn-zip btn-del-files" onclick="deleteBatch(this)">Delete batch</button>'
+                    f'<button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>'
+                    f'</span>'
+                    f'</span>'
+                )
             thumbs = "".join(
                 f'<figure class="thumb-card" data-img="{img}">'
                 f'<div class="thumb-media">'
@@ -139,6 +150,7 @@ def gallery_cards_html(sections):
                 f'</div>'
                 f'<a class="btn-zip" href="/zip/{name}">'
                 f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Batch ZIP</a>'
+                f'{del_batch}'
                 f'</div>'
                 f'<div class="grid">{thumbs}</div>'
                 f'</div>'
@@ -1369,6 +1381,22 @@ function deleteSession(btn, files) {{
     .catch(e => showToast('Delete error: ' + e, 'error'));
 }}
 
+function deleteBatch(btn) {{
+  const card = btn.closest('.batch-card');
+  const name = card.getAttribute('data-batch-name');
+  fetch('/captures/delete?batch=' + encodeURIComponent(name), {{method: 'POST'}})
+    .then(r => r.json())
+    .then(d => {{
+      if (!d.ok) {{
+        showToast('Delete failed: ' + (d.error || ''), 'error');
+        return;
+      }}
+      showToast('Batch deleted: ' + name, 'success');
+      setTimeout(() => refreshGallery(false), 400);
+    }})
+    .catch(e => showToast('Delete error: ' + e, 'error'));
+}}
+
 function pollStatus() {{
   fetch('/server-status')
     .then(r => r.json())
@@ -1469,7 +1497,7 @@ class Handler(SimpleHTTPRequestHandler):
         elif path == "/purge-secondaries":
             body = self._proxy("/purge-secondaries", timeout=60)
             self._send_json(200, {"ok": body.get("ok", False), "secondaries": body.get("secondaries", {})})
-        elif path in ("/session/start", "/session/stop", "/session/delete"):
+        elif path in ("/session/start", "/session/stop", "/session/delete", "/captures/delete"):
             body = self._proxy(path + (f"?{qs}" if qs else ""), timeout=10)
             self._send_json(200, body)
         else:

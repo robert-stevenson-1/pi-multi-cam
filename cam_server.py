@@ -229,6 +229,22 @@ class Primary:
         with self.lock:
             return {"ok": True, "active": self.current_session, "sessions": self.sessions}
 
+    def delete_ungrouped(self, name):
+        name = name.strip()
+        if not name or not all(c.isalnum() or c == "_" for c in name):
+            return {"ok": False, "error": "invalid batch name"}
+        with self.lock:
+            for s in self.sessions:
+                if name in s.get("batches", []):
+                    return {"ok": False, "error": f"batch belongs to session '{s['name']}'"}
+            p = os.path.join(CAPTURES_DIR, name)
+            if not os.path.isdir(p):
+                return {"ok": False, "error": "unknown batch"}
+            shutil.rmtree(p, ignore_errors=True)
+            if self.current_batch and os.path.basename(self.current_batch) == name:
+                self.current_batch = None
+            return {"ok": True, "removed_batch": name}
+
     def new_batch(self):
         name = batch_stamp()
         batch = os.path.join(CAPTURES_DIR, name)
@@ -500,6 +516,9 @@ class Handler(BaseHTTPRequestHandler):
                 name = qs.get("name", [""])[0]
                 files = qs.get("files", ["0"])[0] in ("1", "true")
                 self._send_json(200, primary.session_delete(name, files))
+            elif parsed.path == "/captures/delete":
+                name = qs.get("batch", [""])[0]
+                self._send_json(200, primary.delete_ungrouped(name))
             else:
                 self._send_json(404, {"error": "not found"})
         else:
