@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import datetime
 import tempfile
 import zipfile
 import urllib.parse
@@ -49,6 +50,28 @@ def jpeg_size(path):
     return None
 
 
+def batch_epoch(name):
+    m = re.match(r"^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_", name)
+    if not m:
+        return None
+    try:
+        return datetime.datetime.strptime(
+            m.group(1) + m.group(2) + m.group(3) + "_" + m.group(4) + m.group(5) + m.group(6),
+            "%Y%m%d_%H%M%S",
+        ).timestamp()
+    except ValueError:
+        return None
+
+
+def session_created(s):
+    created = s.get("created")
+    if created:
+        return created
+    eps = [batch_epoch(b) for b in s.get("batches", [])]
+    eps = [e for e in eps if e is not None]
+    return min(eps) if eps else 0.0
+
+
 def format_batch_display(name):
     m = re.match(r"^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_([a-f0-9]+)$", name)
     if m:
@@ -81,7 +104,7 @@ def gallery_cards_html(sections):
         """
 
     sections_html = []
-    for title, cardlist, is_session in sections:
+    for title, cardlist, is_session, created in sections:
         total_photos = sum(len(entries) for _, entries in cardlist)
         total_batches = len(cardlist)
         safe_title = urllib.parse.quote(title) if title else "ungrouped"
@@ -92,7 +115,7 @@ def gallery_cards_html(sections):
             formatted_time, hsh = format_batch_display(name)
             hsh_badge = f'<span class="hash-tag">{hsh}</span>' if hsh else ""
             thumbs = "".join(
-                f'<figure class="thumb-card">'
+                f'<figure class="thumb-card" data-img="{img}">'
                 f'<div class="thumb-media">'
                 f'<span class="dev-badge">{parse_device_badge(img)}</span>'
                 f'<a href="{name}/{img}" data-pswp-width="{w}" data-pswp-height="{h}" class="pswp-link">'
@@ -108,7 +131,7 @@ def gallery_cards_html(sections):
             )
 
             batch_cards.append(
-                f'<div class="batch-card">'
+                f'<div class="batch-card" data-batch-name="{name}">'
                 f'<div class="batch-header">'
                 f'<div class="batch-title-group">'
                 f'<span class="batch-time">{formatted_time}</span>{hsh_badge}'
@@ -145,7 +168,7 @@ def gallery_cards_html(sections):
             )
 
         sections_html.append(
-            f'<details class="session-accordion" data-session-key="{session_key}" data-session-name="{safe_title}">'
+            f'<details class="session-accordion" data-session-key="{session_key}" data-session-name="{safe_title}" data-session-created="{created}">'
             f'<summary class="session-header">'
             f'<div class="session-header-left">'
             f'<span class="chevron"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>'
@@ -384,6 +407,31 @@ body {{
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
+}}
+
+.sort-group {{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}}
+
+.select-sort {{
+  font-size: 0.78rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: var(--text-main);
+  outline: none;
+  cursor: pointer;
+}}
+.select-sort:focus {{
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
 }}
 
 .btn-text {{
@@ -866,6 +914,25 @@ figcaption {{
 <main class="main-content">
   <div class="gallery-subbar">
     <div class="view-controls">
+      <label class="sort-group">Sessions
+        <select class="select-sort" id="selSortSessions" onchange="setSort('sessions', this.value)">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="name">Name A–Z</option>
+        </select>
+      </label>
+      <label class="sort-group">Captures
+        <select class="select-sort" id="selSortBatches" onchange="setSort('batches', this.value)">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+        </select>
+      </label>
+      <label class="sort-group">Photos
+        <select class="select-sort" id="selSortImages" onchange="setSort('images', this.value)">
+          <option value="file">Filename</option>
+          <option value="device">Device cam ID</option>
+        </select>
+      </label>
       <button class="btn-text" onclick="toggleAllAccordions(true)">Expand All</button>
       <span style="color:var(--border-strong)">·</span>
       <button class="btn-text" onclick="toggleAllAccordions(false)">Collapse All</button>
@@ -954,6 +1021,88 @@ function toggleAllAccordions(open) {{
   }});
 }}
 
+const SORT_STORE = 'mcGallerySort';
+let sortPrefs = {{ sessions: 'newest', batches: 'newest', images: 'file' }};
+try {{
+  const saved = JSON.parse(localStorage.getItem(SORT_STORE) || '{{}}');
+  if (saved && typeof saved === 'object') Object.assign(sortPrefs, saved);
+}} catch (e) {{}}
+
+function naturalKey(s) {{
+  return s.toLowerCase().split(/(\\d+)/).map(t => (/^\\d+$/.test(t) ? t.padStart(12, '0') : t));
+}}
+
+function cmpNatural(a, b) {{
+  const ka = naturalKey(a), kb = naturalKey(b);
+  const n = Math.min(ka.length, kb.length);
+  for (let i = 0; i < n; i++) {{
+    if (ka[i] !== kb[i]) return ka[i] < kb[i] ? -1 : 1;
+  }}
+  return ka.length - kb.length;
+}}
+
+function cmpFile(a, b) {{
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}}
+
+function applySorts() {{
+  const cont = document.getElementById('galleryContainer');
+  const sm = sortPrefs.sessions;
+  const accs = Array.from(cont.querySelectorAll(':scope > .session-accordion'));
+  accs.sort((a, b) => {{
+    if (sm === 'name') {{
+      const na = decodeURIComponent(a.getAttribute('data-session-name') || '');
+      const nb = decodeURIComponent(b.getAttribute('data-session-name') || '');
+      return na.localeCompare(nb);
+    }}
+    const ca = parseFloat(a.getAttribute('data-session-created') || '0');
+    const cb = parseFloat(b.getAttribute('data-session-created') || '0');
+    if (ca === cb) return 0;
+    return sm === 'newest' ? cb - ca : ca - cb;
+  }});
+  accs.forEach(el => cont.appendChild(el));
+
+  const bm = sortPrefs.batches;
+  if (bm !== 'file') {{
+    document.querySelectorAll('.session-body').forEach(body => {{
+      const cards = Array.from(body.querySelectorAll(':scope > .batch-card'));
+      cards.sort((a, b) => {{
+        const na = a.getAttribute('data-batch-name') || '';
+        const nb = b.getAttribute('data-batch-name') || '';
+        return bm === 'newest' ? cmpNatural(nb, na) : cmpNatural(na, nb);
+      }});
+      cards.forEach(c => body.appendChild(c));
+    }});
+  }}
+
+  const im = sortPrefs.images;
+  document.querySelectorAll('.grid').forEach(grid => {{
+    const figs = Array.from(grid.querySelectorAll(':scope > .thumb-card'));
+    figs.sort((a, b) => {{
+      const na = a.getAttribute('data-img') || '';
+      const nb = b.getAttribute('data-img') || '';
+      return im === 'device' ? cmpNatural(na, nb) : cmpFile(na, nb);
+    }});
+    figs.forEach(f => grid.appendChild(f));
+  }});
+}}
+
+function setSort(kind, value) {{
+  sortPrefs[kind] = value;
+  try {{
+    localStorage.setItem(SORT_STORE, JSON.stringify(sortPrefs));
+  }} catch (e) {{}}
+  applySorts();
+  initLightbox();
+}}
+
+function initSortControls() {{
+  document.getElementById('selSortSessions').value = sortPrefs.sessions;
+  document.getElementById('selSortBatches').value = sortPrefs.batches;
+  document.getElementById('selSortImages').value = sortPrefs.images;
+}}
+
 function refreshGallery(showToastMsg = false) {{
   const openKeys = getOpenAccordionKeys();
   return fetch('/?partial=1')
@@ -961,7 +1110,10 @@ function refreshGallery(showToastMsg = false) {{
     .then(html => {{
       document.getElementById('galleryContainer').innerHTML = html;
       restoreAccordionStates(openKeys);
+      applySorts();
       initLightbox();
+      initSortControls();
+      if (typeof updateBatchDl === 'function') updateBatchDl();
       if (showToastMsg) showToast('Gallery updated', 'info', 2000);
     }})
     .catch(err => {{
@@ -1187,6 +1339,8 @@ function pollStatus() {{
 
 pollStatus();
 setInterval(pollStatus, 5000);
+initSortControls();
+applySorts();
 </script>
 
 <script type="module">
@@ -1307,9 +1461,11 @@ class Handler(SimpleHTTPRequestHandler):
         for s in reversed(sessions):
             cards = [(b, by_name.pop(b, [])) for b in s.get("batches", []) if b in by_name]
             if cards:
-                sections.append((s["name"], cards, True))
+                sections.append((s["name"], cards, True, session_created(s)))
         if by_name:
-            sections.append(("Ungrouped", [(n, e) for n, e in by_name.items()], False))
+            ung_eps = [batch_epoch(n) for n in by_name]
+            ung_eps = [e for e in ung_eps if e is not None]
+            sections.append(("Ungrouped", [(n, e) for n, e in by_name.items()], False, max(ung_eps) if ung_eps else 0.0))
         if partial:
             body = gallery_cards_html(sections).encode("utf-8")
         else:
