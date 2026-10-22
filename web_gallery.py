@@ -1059,25 +1059,321 @@ figcaption {
     display: flex;
   }
 }
+
+.mode-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9999px;
+  background: var(--bg-elevated);
+  padding: 0.2rem;
+}
+.mode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.9rem;
+  border-radius: 9999px;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+.mode-tab:hover {
+  background: #ffffff;
+  color: var(--text-main);
+}
+.mode-tab.current {
+  background: var(--accent-primary);
+  color: #ffffff;
+}
+
+.rec-pill {
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+.rec-pill .live-dot {
+  background: #ef4444;
+  box-shadow: 0 0 6px #ef4444;
+  animation: recBlink 1s infinite;
+}
+@keyframes recBlink {
+  50% { opacity: 0.3; }
+}
+
+.settings-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1.1rem 1.25rem;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 1.25rem;
+}
+.record-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin: 0.9rem 0 0.75rem;
+}
+.set-field label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.set-field select,
+.set-field input {
+  width: 100%;
+  font-size: 0.85rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: var(--text-main);
+  outline: none;
+}
+.set-field select:focus,
+.set-field input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+.settings-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+.btn-record {
+  padding: 0.7rem 1.4rem;
+  font-size: 0.95rem;
+  border-radius: 9999px;
+}
+.btn-stop {
+  background: var(--accent-danger);
+  border-color: var(--accent-danger);
+  color: #ffffff;
+}
+.btn-stop:hover {
+  background: var(--accent-danger-hover);
+  border-color: var(--accent-danger-hover);
+}
+.vid-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vid-media a {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-light);
+}
+.vid-media a:hover {
+  color: var(--accent-primary);
+}
+.vid-media svg {
+  width: 38px;
+  height: 38px;
+}
+
+@media (max-width: 640px) {
+  .settings-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .btn-record {
+    flex: 1;
+    min-height: 44px;
+  }
+}
 '''
 
 
-def gallery_html(sections):
-    cards_content = gallery_cards_html(sections)
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Capture Gallery</title>
-<link rel="stylesheet" href="/static/photoswipe/photoswipe.css">
-<style>
-{PAGE_CSS}
-</style>
-</head>
-<body>
+VIDEO_EXTENSIONS = (".mp4", ".h264")
 
-<header class="app-header">
+
+def format_size(n):
+    if n >= 1073741824:
+        return f"{n / 1073741824:.2f} GB"
+    if n >= 1048576:
+        return f"{n / 1048576:.1f} MB"
+    return f"{n / 1024:.0f} KB"
+
+
+def mode_tabs(current):
+    photo_cur = " current" if current == "photo" else ""
+    video_cur = " current" if current == "video" else ""
+    return f"""<nav class="mode-tabs" aria-label="Capture mode">
+          <a class="mode-tab{photo_cur}" href="/" title="Photo capture mode">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+            Photos
+          </a>
+          <a class="mode-tab{video_cur}" href="/video" title="Video capture mode">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+            Video
+          </a>
+        </nav>"""
+
+
+def video_settings_fields(ss):
+    ss = ss or {}
+    res = str(ss.get("res", "1080"))
+    fps = str(ss.get("fps", "30"))
+    qual = str(ss.get("quality", "medium"))
+    dur = str(ss.get("duration", 0))
+    prefill = "1" if ss else "0"
+    return f"""<div class="settings-grid" id="videoSettings" data-prefilled="{prefill}">
+        <div class="set-field"><label for="vidRes">Resolution</label>
+          <select id="vidRes">
+            <option value="1080" {'selected' if res == '1080' else ''}>1080p</option>
+            <option value="720" {'selected' if res == '720' else ''}>720p</option>
+          </select></div>
+        <div class="set-field"><label for="vidFps">Frame rate</label>
+          <select id="vidFps">
+            <option value="30" {'selected' if fps == '30' else ''}>30 fps</option>
+            <option value="15" {'selected' if fps == '15' else ''}>15 fps</option>
+          </select></div>
+        <div class="set-field"><label for="vidQual">Quality</label>
+          <select id="vidQual">
+            <option value="low" {'selected' if qual == 'low' else ''}>Low · 4 Mbps</option>
+            <option value="medium" {'selected' if qual == 'medium' else ''}>Medium · 10 Mbps</option>
+            <option value="high" {'selected' if qual == 'high' else ''}>High · 20 Mbps</option>
+          </select></div>
+        <div class="set-field"><label for="vidDur">Max duration (s)</label>
+          <input id="vidDur" type="number" min="0" step="1" value="{dur}">
+        </div>
+      </div>"""
+
+
+def video_cards_html(sections):
+    if not sections:
+        return """
+        <div class="empty-state">
+            <div class="empty-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                </svg>
+            </div>
+            <h2>No video recordings yet</h2>
+            <p>Press <strong>Start Recording</strong> above to capture video from every camera at once, then <strong>Stop Recording</strong> when you are done. Recordings appear here after upload.</p>
+        </div>
+        """
+    sections_html = []
+    for title, cardlist, is_session, created in sections:
+        total_videos = sum(len(entries) for _, entries in cardlist)
+        total_batches = len(cardlist)
+        safe_title = urllib.parse.quote(title) if title else "ungrouped"
+        session_key = f"sess_{safe_title}"
+        batch_cards = []
+        for name, entries in cardlist:
+            formatted_time, hsh = format_batch_display(name)
+            hsh_badge = f'<span class="hash-tag">{hsh}</span>' if hsh else ""
+            del_batch = ""
+            if not is_session:
+                del_batch = (
+                    f'<span class="del-wrap">'
+                    f'<button class="btn-zip btn-del" onclick="showDelConfirm(this)">Delete</button>'
+                    f'<span class="del-confirm" hidden>'
+                    f'<button class="btn-zip btn-del-files" onclick="deleteBatch(this)">Delete batch</button>'
+                    f'<button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>'
+                    f'</span>'
+                    f'</span>'
+                )
+            figures = "".join(
+                f'<figure class="thumb-card" data-img="{img}">'
+                f'<div class="thumb-media vid-media">'
+                f'<span class="dev-badge">{parse_device_badge(img)}</span>'
+                f'<a href="{name}/{img}" download title="{img}" aria-label="Download {img}">'
+                f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>'
+                f'</a>'
+                f'</div>'
+                f'<figcaption><span class="fname" title="{img}">{img}</span>'
+                f'<span class="count-pill">{format_size(size)}</span>'
+                f'<a class="btn-save" href="{name}/{img}" download title="Download file">'
+                f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> <span class="save-label">Save</span></a>'
+                f'</figcaption></figure>'
+                for img, size in entries
+            )
+            batch_cards.append(
+                f'<div class="batch-card" data-batch-name="{name}">'
+                f'<div class="batch-header">'
+                f'<div class="batch-title-group">'
+                f'<span class="batch-time">{formatted_time}</span>{hsh_badge}'
+                f'<span class="count-pill">{len(entries)} video{"s" if len(entries) != 1 else ""}</span>'
+                f'</div>'
+                f'<a class="btn-zip" href="/zip/{name}">'
+                f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Batch ZIP</a>'
+                f'{del_batch}'
+                f'</div>'
+                f'<div class="grid">{figures}</div>'
+                f'</div>'
+            )
+        dl_session = ""
+        del_btn = ""
+        cont_btn = ""
+        if is_session and title:
+            cont_btn = (
+                f'<button class="btn-zip btn-session-zip" onclick="event.stopPropagation();continueSession(this)">'
+                f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> Continue</button>'
+            )
+            dl_session = (
+                f'<a class="btn-zip btn-session-zip" href="/zip/session/{urllib.parse.quote(title)}" onclick="event.stopPropagation()">'
+                f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Session ZIP</a>'
+            )
+            del_btn = (
+                f'<span class="del-wrap" onclick="event.stopPropagation()">'
+                f'<button class="btn-zip btn-del" onclick="showDelConfirm(this)">Delete</button>'
+                f'<span class="del-confirm" hidden>'
+                f'<button class="btn-zip" onclick="deleteSession(this)">Keep files</button>'
+                f'<button class="btn-zip btn-del-files" onclick="deleteSession(this, true)">Delete files</button>'
+                f'<button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>'
+                f'</span>'
+                f'</span>'
+            )
+        sections_html.append(
+            f'<details class="session-accordion" data-session-key="{session_key}" data-session-name="{safe_title}" data-session-created="{created}" data-is-session="{1 if is_session and title else 0}">'
+            f'<summary class="session-header">'
+            f'<div class="session-header-left">'
+            f'<label class="sel-check"><input type="checkbox" class="sel-sess" data-name="{safe_title}" onclick="event.stopPropagation()"></label>'
+            f'<span class="chevron"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg></span>'
+            f'<span class="session-title">{title if title else "Ungrouped Recordings"}</span>'
+            f'<div class="session-meta-pills">'
+            f'<span class="meta-pill">{total_batches} batch{"es" if total_batches != 1 else ""}</span>'
+            f'<span class="meta-pill">{total_videos} video{"s" if total_videos != 1 else ""}</span>'
+            f'</div>'
+            f'</div>'
+            f'<div class="session-header-right">{cont_btn}{dl_session}{del_btn}</div>'
+            f'</summary>'
+            f'<div class="session-body">'
+            f'{"".join(batch_cards)}'
+            f'</div>'
+            f'</details>'
+        )
+    return "".join(sections_html)
+
+
+def header_html(mode):
+    capture_btn = ""
+    if mode == "photo":
+        capture_btn = """
+        <button class="btn btn-primary" id="btnCapture" onclick="triggerCapture(this)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
+          <span>Capture All</span>
+        </button>"""
+    return f"""<header class="app-header">
   <div class="header-container">
     <div class="header-top">
       <div class="brand-section">
@@ -1089,6 +1385,7 @@ def gallery_html(sections):
           </svg>
           Multi-Cam Gallery
         </h1>
+        {mode_tabs(mode)}
       </div>
       <div class="status-pills-bar" id="statusPills">
         <span class="live-pill" id="primaryPill"><span class="live-dot"></span> Checking Primary...</span>
@@ -1099,10 +1396,7 @@ def gallery_html(sections):
 
     <div class="controls-bar">
       <div class="actions-group">
-        <button class="btn btn-primary" id="btnCapture" onclick="triggerCapture(this)">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
-          <span>Capture All</span>
-        </button>
+        {capture_btn}
         <button class="btn" id="btnSync" onclick="triggerSync(this)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
           <span>Sync Now</span>
@@ -1123,10 +1417,11 @@ def gallery_html(sections):
       </div>
     </div>
   </div>
-</header>
+</header>"""
 
-<main class="main-content">
-  <div class="gallery-subbar">
+
+def subbar_html():
+    return """<div class="gallery-subbar">
     <div class="view-controls">
       <label class="sort-group">Sessions
         <select class="select-sort" id="selSortSessions" onchange="setSort('sessions', this.value)">
@@ -1141,7 +1436,7 @@ def gallery_html(sections):
           <option value="oldest">Oldest first</option>
         </select>
       </label>
-      <label class="sort-group">Photos
+      <label class="sort-group">Files
         <select class="select-sort" id="selSortImages" onchange="setSort('images', this.value)">
           <option value="file">Filename</option>
           <option value="device">Device cam ID</option>
@@ -1155,29 +1450,57 @@ def gallery_html(sections):
       <button class="btn-text" id="btnSelectAllBtn" onclick="toggleSelectAll()" hidden>Select All</button>
       <button class="btn btn-primary btn-batch-dl" id="btnBatchDl" onclick="downloadSelected()" hidden>Download Selected (0)</button>
     </div>
+  </div>"""
+
+
+def main_html(mode, cards_content, session_settings=None):
+    if mode == "photo":
+        return f"""<main class="main-content">
+  <div class="gallery-subbar">
+    {subbar_html()}
   </div>
 
   <div id="galleryContainer">
     {cards_content}
   </div>
-</main>
-
-<div class="modal-backdrop" id="purgeModal">
-  <div class="modal-box">
-    <h3>Purge Secondary Captures?</h3>
-    <p>This will permanently delete local capture files stored on registered secondary Pis to free up disk space. Captures already synced to the primary will not be affected.</p>
-    <div class="modal-actions">
-      <button class="btn" onclick="closePurgeModal()">Cancel</button>
-      <button class="btn btn-primary" style="background:var(--accent-danger);border-color:var(--accent-danger);" id="btnConfirmPurge" onclick="confirmPurge()">Delete Captures</button>
+</main>"""
+    settings = video_settings_fields(session_settings)
+    return f"""<main class="main-content">
+  <div class="settings-card">
+    <div class="record-row">
+      <button class="btn btn-primary btn-record" id="btnRecord" onclick="toggleRecord(this)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"></circle></svg>
+        <span id="btnRecordText">Start Recording</span>
+      </button>
+      <span class="live-pill rec-pill" id="recPill" hidden><span class="live-dot"></span> <span id="recPillText">REC</span></span>
     </div>
+    {settings}
+    <p class="settings-note">Settings apply to every Pi in the next recording and are saved with the active video session. Each camera records its own file; no live preview is shown.</p>
   </div>
-</div>
+  <div class="gallery-subbar">
+    {subbar_html()}
+  </div>
 
-<div class="mobile-bar" id="mobileBar">
-  <button class="btn btn-primary btn-capture-mobile" id="btnCaptureM" onclick="triggerCapture(this)">
+  <div id="galleryContainer">
+    {cards_content}
+  </div>
+</main>"""
+
+
+def mobile_bar_html(mode):
+    primary_btn = ""
+    if mode == "photo":
+        primary_btn = """<button class="btn btn-primary btn-capture-mobile" id="btnCaptureM" onclick="triggerCapture(this)">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3"></circle></svg>
     <span>Capture All</span>
-  </button>
+  </button>"""
+    else:
+        primary_btn = """<button class="btn btn-primary btn-capture-mobile" id="btnRecordM" onclick="toggleRecord(this)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"></circle></svg>
+    <span id="btnRecordTextM">Start Recording</span>
+  </button>"""
+    return f"""<div class="mobile-bar" id="mobileBar">
+  {primary_btn}
   <div class="overflow-wrap">
     <button class="btn btn-icon-only" onclick="toggleOverflow(event)">&nbsp;&#8942;&nbsp;</button>
     <div class="overflow-menu" id="overflowMenu" hidden>
@@ -1191,218 +1514,224 @@ def gallery_html(sections):
       </button>
     </div>
   </div>
-</div>
+</div>"""
 
-<div class="toast-container" id="toastContainer"></div>
 
-<script>
-let lightbox = null;
+PAGE_JS = """let lightbox = null;
+const PAGE_MODE = '__PAGE_MODE__';
 
-function showToast(message, type = 'info', duration = 4000) {{
+function modeSync() {
+  try { fetch('/mode?mode=' + PAGE_MODE, {method: 'POST'}); } catch (e) {}
+}
+
+function updateRecordUI() {}
+
+function showToast(message, type = 'info', duration = 4000) {
   const container = document.getElementById('toastContainer');
   const toast = document.createElement('div');
   toast.className = 'toast ' + type;
   toast.textContent = message;
   container.appendChild(toast);
-  setTimeout(() => {{
+  setTimeout(() => {
     toast.style.opacity = '0';
     toast.style.transform = 'translateY(10px)';
     toast.style.transition = 'all 0.2s ease';
     setTimeout(() => toast.remove(), 250);
-  }}, duration);
-}}
+  }, duration);
+}
 
-function initLightbox() {{
+function initLightbox() {
   if (typeof PhotoSwipeLightbox === 'undefined') return;
-  if (lightbox) {{
+  if (lightbox) {
     lightbox.destroy();
-  }}
-  lightbox = new PhotoSwipeLightbox({{
+  }
+  lightbox = new PhotoSwipeLightbox({
     gallery: '.grid',
     children: 'a.pswp-link',
     pswpModule: () => import('/static/photoswipe/photoswipe.esm.js')
-  }});
+  });
   lightbox.init();
-}}
+}
 
-function getOpenAccordionKeys() {{
+function getOpenAccordionKeys() {
   const openKeys = new Set();
-  document.querySelectorAll('.session-accordion[open]').forEach(el => {{
+  document.querySelectorAll('.session-accordion[open]').forEach(el => {
     const key = el.getAttribute('data-session-key');
     if (key) openKeys.add(key);
-  }});
+  });
   return openKeys;
-}}
+}
 
-function restoreAccordionStates(openKeys) {{
-  document.querySelectorAll('.session-accordion').forEach(el => {{
+function restoreAccordionStates(openKeys) {
+  document.querySelectorAll('.session-accordion').forEach(el => {
     const key = el.getAttribute('data-session-key');
-    if (key && openKeys.has(key)) {{
+    if (key && openKeys.has(key)) {
       el.setAttribute('open', '');
       el.classList.add('is-open');
-    }} else if (key && openKeys.size > 0) {{
+    } else if (key && openKeys.size > 0) {
       el.removeAttribute('open');
       el.classList.remove('is-open');
-    }}
-  }});
-}}
+    }
+  });
+}
 
-function toggleAllAccordions(open) {{
-  document.querySelectorAll('.session-accordion').forEach(el => {{
-    if (open) {{
+function toggleAllAccordions(open) {
+  document.querySelectorAll('.session-accordion').forEach(el => {
+    if (open) {
       el.setAttribute('open', '');
       el.classList.add('is-open');
-    }} else {{
+    } else {
       el.removeAttribute('open');
       el.classList.remove('is-open');
-    }}
-  }});
-}}
+    }
+  });
+}
 
 const SORT_STORE = 'mcGallerySort';
-let sortPrefs = {{ sessions: 'newest', batches: 'newest', images: 'file' }};
-try {{
-  const saved = JSON.parse(localStorage.getItem(SORT_STORE) || '{{}}');
+let sortPrefs = { sessions: 'newest', batches: 'newest', images: 'file' };
+try {
+  const saved = JSON.parse(localStorage.getItem(SORT_STORE) || '{}');
   if (saved && typeof saved === 'object') Object.assign(sortPrefs, saved);
-}} catch (e) {{}}
+} catch (e) {}
 
-function naturalKey(s) {{
+function naturalKey(s) {
   return s.toLowerCase().split(/(\\d+)/).map(t => (/^\\d+$/.test(t) ? t.padStart(12, '0') : t));
-}}
+}
 
-function cmpNatural(a, b) {{
+function cmpNatural(a, b) {
   const ka = naturalKey(a), kb = naturalKey(b);
   const n = Math.min(ka.length, kb.length);
-  for (let i = 0; i < n; i++) {{
+  for (let i = 0; i < n; i++) {
     if (ka[i] !== kb[i]) return ka[i] < kb[i] ? -1 : 1;
-  }}
+  }
   return ka.length - kb.length;
-}}
+}
 
-function cmpFile(a, b) {{
+function cmpFile(a, b) {
   if (a === b) return 0;
   return a < b ? -1 : 1;
-}}
+}
 
-function applySorts() {{
+function applySorts() {
   const cont = document.getElementById('galleryContainer');
   const sm = sortPrefs.sessions;
   const accs = Array.from(cont.querySelectorAll(':scope > .session-accordion'));
-  accs.sort((a, b) => {{
-    if (sm === 'name') {{
+  accs.sort((a, b) => {
+    if (sm === 'name') {
       const na = decodeURIComponent(a.getAttribute('data-session-name') || '');
       const nb = decodeURIComponent(b.getAttribute('data-session-name') || '');
       return na.localeCompare(nb);
-    }}
+    }
     const ca = parseFloat(a.getAttribute('data-session-created') || '0');
     const cb = parseFloat(b.getAttribute('data-session-created') || '0');
     if (ca === cb) return 0;
     return sm === 'newest' ? cb - ca : ca - cb;
-  }});
+  });
   accs.forEach(el => cont.appendChild(el));
 
   const bm = sortPrefs.batches;
-  if (bm !== 'file') {{
-    document.querySelectorAll('.session-body').forEach(body => {{
+  if (bm !== 'file') {
+    document.querySelectorAll('.session-body').forEach(body => {
       const cards = Array.from(body.querySelectorAll(':scope > .batch-card'));
-      cards.sort((a, b) => {{
+      cards.sort((a, b) => {
         const na = a.getAttribute('data-batch-name') || '';
         const nb = b.getAttribute('data-batch-name') || '';
         return bm === 'newest' ? cmpNatural(nb, na) : cmpNatural(na, nb);
-      }});
+      });
       cards.forEach(c => body.appendChild(c));
-    }});
-  }}
+    });
+  }
 
   const im = sortPrefs.images;
-  document.querySelectorAll('.grid').forEach(grid => {{
+  document.querySelectorAll('.grid').forEach(grid => {
     const figs = Array.from(grid.querySelectorAll(':scope > .thumb-card'));
-    figs.sort((a, b) => {{
+    figs.sort((a, b) => {
       const na = a.getAttribute('data-img') || '';
       const nb = b.getAttribute('data-img') || '';
       return im === 'device' ? cmpNatural(na, nb) : cmpFile(na, nb);
-    }});
+    });
     figs.forEach(f => grid.appendChild(f));
-  }});
-}}
+  });
+}
 
-function setSort(kind, value) {{
+function setSort(kind, value) {
   sortPrefs[kind] = value;
-  try {{
+  try {
     localStorage.setItem(SORT_STORE, JSON.stringify(sortPrefs));
-  }} catch (e) {{}}
+  } catch (e) {}
   applySorts();
   initLightbox();
-}}
+}
 
-function initSortControls() {{
+function initSortControls() {
   document.getElementById('selSortSessions').value = sortPrefs.sessions;
   document.getElementById('selSortBatches').value = sortPrefs.batches;
   document.getElementById('selSortImages').value = sortPrefs.images;
-}}
+}
 
-function toggleSelectMode() {{
+function toggleSelectMode() {
   document.body.classList.toggle('select-mode');
   const on = document.body.classList.contains('select-mode');
   document.getElementById('btnSelectAllBtn').hidden = !on;
-  if (!on) {{
-    document.querySelectorAll('.sel-sess').forEach(cb => {{ cb.checked = false; }});
-  }}
+  if (!on) {
+    document.querySelectorAll('.sel-sess').forEach(cb => { cb.checked = false; });
+  }
   updateBatchDl();
-}}
+}
 
-function toggleSelectAll() {{
+function toggleSelectAll() {
   const boxes = document.querySelectorAll('.sel-sess');
   const all = Array.from(boxes).every(cb => cb.checked);
-  boxes.forEach(cb => {{ cb.checked = !all; }});
+  boxes.forEach(cb => { cb.checked = !all; });
   updateBatchDl();
-}}
+}
 
-function updateBatchDl() {{
+function updateBatchDl() {
   const n = document.querySelectorAll('.sel-sess:checked').length;
   const btn = document.getElementById('btnBatchDl');
   btn.hidden = n === 0;
   btn.textContent = 'Download Selected (' + n + ')';
   btn.disabled = n === 0;
-}}
+}
 
-function downloadSelected() {{
+function downloadSelected() {
   const sessions = [];
   const batches = [];
-  document.querySelectorAll('.sel-sess:checked').forEach(cb => {{
+  document.querySelectorAll('.sel-sess:checked').forEach(cb => {
     const name = decodeURIComponent(cb.getAttribute('data-name'));
     const enc = encodeURIComponent(name);
     (cb.getAttribute('data-is-session') === '1' ? sessions : batches).push(enc);
-  }});
+  });
   if (!sessions.length && !batches.length) return;
   const url = '/zip/multi?sessions=' + sessions.join(',') + '&batches=' + batches.join(',');
   window.location.assign(url);
-}}
+}
 
-document.addEventListener('change', e => {{
-  if (e.target && e.target.classList && e.target.classList.contains('sel-sess')) {{
+document.addEventListener('change', e => {
+  if (e.target && e.target.classList && e.target.classList.contains('sel-sess')) {
     updateBatchDl();
-  }}
-}});
+  }
+});
 
-function toggleOverflow(e) {{
+function toggleOverflow(e) {
   if (e) e.stopPropagation();
   const menu = document.getElementById('overflowMenu');
   menu.hidden = !menu.hidden;
-}}
+}
 
-document.addEventListener('click', e => {{
+document.addEventListener('click', e => {
   const menu = document.getElementById('overflowMenu');
-  if (menu && !menu.hidden && !e.target.closest('.overflow-wrap')) {{
+  if (menu && !menu.hidden && !e.target.closest('.overflow-wrap')) {
     menu.hidden = true;
-  }}
-}});
+  }
+});
 
-function refreshGallery(showToastMsg = false) {{
+function refreshGallery(showToastMsg = false, url) {
+  url = url || (PAGE_MODE === 'video' ? '/video?partial=1' : '/?partial=1');
   const openKeys = getOpenAccordionKeys();
-  return fetch('/?partial=1')
+  return fetch(url)
     .then(r => r.text())
-    .then(html => {{
+    .then(html => {
       document.getElementById('galleryContainer').innerHTML = html;
       restoreAccordionStates(openKeys);
       applySorts();
@@ -1410,248 +1739,296 @@ function refreshGallery(showToastMsg = false) {{
       initSortControls();
       if (typeof updateBatchDl === 'function') updateBatchDl();
       if (showToastMsg) showToast('Gallery updated', 'info', 2000);
-    }})
-    .catch(err => {{
+    })
+    .catch(err => {
       if (showToastMsg) showToast('Failed to refresh gallery: ' + err, 'error');
-    }});
-}}
+    });
+}
 
-function triggerCapture(btn) {{
+function triggerCapture(btn) {
   btn = btn || document.getElementById('btnCapture');
   const original = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> <span>Capturing...</span>';
   
-  fetch('/capture', {{method: 'POST'}})
+  fetch('/capture', {method: 'POST'})
     .then(r => r.json())
-    .then(d => {{
-      if (d.ok) {{
+    .then(d => {
+      if (d.ok) {
         showToast('Capture complete!', 'success');
-        setTimeout(() => refreshGallery(false), {CAPTURE_REFRESH_MS});
-      }} else {{
+        setTimeout(() => refreshGallery(false), __REFRESH_MS__);
+      } else {
         showToast('Capture failed: ' + (d.error || 'Unknown error'), 'error');
-      }}
-    }})
+      }
+    })
     .catch(e => showToast('Capture error: ' + e, 'error'))
-    .finally(() => {{
+    .finally(() => {
       btn.disabled = false;
       btn.innerHTML = original;
-    }});
-}}
+    });
+}
 
-function triggerSync(btn) {{
+function triggerSync(btn) {
   btn = btn || document.getElementById('btnSync');
   const original = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner" style="border-top-color:var(--text-main)"></span> <span>Syncing...</span>';
   
-  fetch('/sync', {{method: 'POST'}})
+  fetch('/sync', {method: 'POST'})
     .then(r => r.json())
-    .then(d => {{
-      if (!d.ok) {{
+    .then(d => {
+      if (!d.ok) {
         showToast('Sync failed: ' + (d.error || ''), 'error');
         return;
-      }}
-      const parts = Object.entries(d.secondaries || {{}}).map(([k, v]) =>
+      }
+      const parts = Object.entries(d.secondaries || {}).map(([k, v]) =>
         v.error ? k + ': ' + v.error : k + ': +' + v.pushed + (v.failed ? ' (' + v.failed + ' failed)' : '')
       );
       showToast(parts.length ? 'Sync: ' + parts.join(' | ') : 'No secondaries registered.', 'success');
       setTimeout(() => refreshGallery(false), 600);
-    }})
+    })
     .catch(e => showToast('Sync error: ' + e, 'error'))
-    .finally(() => {{
+    .finally(() => {
       btn.disabled = false;
       btn.innerHTML = original;
-    }});
-}}
+    });
+}
 
-function openPurgeModal() {{
+function openPurgeModal() {
   document.getElementById('purgeModal').classList.add('active');
-}}
+}
 
-function closePurgeModal() {{
+function closePurgeModal() {
   document.getElementById('purgeModal').classList.remove('active');
-}}
+}
 
-function confirmPurge() {{
+function confirmPurge() {
   const btn = document.getElementById('btnConfirmPurge');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Deleting...';
 
-  fetch('/purge-secondaries', {{method: 'POST'}})
+  fetch('/purge-secondaries', {method: 'POST'})
     .then(r => r.json())
-    .then(d => {{
+    .then(d => {
       closePurgeModal();
-      if (!d.ok) {{
+      if (!d.ok) {
         showToast('Purge failed: ' + (d.error || ''), 'error');
-      }} else {{
-        const parts = Object.entries(d.secondaries || {{}}).map(([k, v]) =>
+      } else {
+        const parts = Object.entries(d.secondaries || {}).map(([k, v]) =>
           v.error ? k + ': ' + v.error : k + ': ' + v.deleted + ' deleted'
         );
         showToast(parts.length ? 'Purged: ' + parts.join(' | ') : 'No secondaries registered.', 'success');
-      }}
-    }})
-    .catch(e => {{
+      }
+    })
+    .catch(e => {
       closePurgeModal();
       showToast('Purge error: ' + e, 'error');
-    }})
-    .finally(() => {{
+    })
+    .finally(() => {
       btn.disabled = false;
       btn.textContent = 'Delete Captures';
-    }});
-}}
+    });
+}
 
-function startSession() {{
+function startSession() {
   const input = document.getElementById('sessname');
   const name = input.value.trim();
-  if (!name) {{
+  if (!name) {
     showToast('Please enter a session name.', 'info');
     return;
-  }}
-  fetch('/session/start?name=' + encodeURIComponent(name), {{method: 'POST'}})
+  }
+  fetch('/session/start?name=' + encodeURIComponent(name) + '&kind=' + PAGE_MODE, {method: 'POST'})
     .then(r => r.json())
-    .then(d => {{
-      if (d.ok) {{
+    .then(d => {
+      if (d.ok) {
         showToast('Session started: ' + d.session, 'success');
         input.value = '';
         pollStatus();
         setTimeout(() => refreshGallery(false), 500);
-      }} else {{
+      } else {
         showToast('Start session failed: ' + (d.error || ''), 'error');
-      }}
-    }})
+      }
+    })
     .catch(e => showToast('Session error: ' + e, 'error'));
-}}
+}
 
-function continueSession(btn) {{
+function continueSession(btn) {
   const acc = btn.closest('.session-accordion');
   const name = decodeURIComponent(acc.getAttribute('data-session-name'));
-  fetch('/session/start?name=' + encodeURIComponent(name), {{method: 'POST'}})
+  fetch('/session/start?name=' + encodeURIComponent(name) + '&kind=' + PAGE_MODE, {method: 'POST'})
     .then(r => r.json())
-    .then(d => {{
-      if (d.ok) {{
+    .then(d => {
+      if (d.ok) {
         showToast('Continuing session: ' + d.session, 'success');
         pollStatus();
-      }} else {{
+      } else {
         showToast('Continue failed: ' + (d.error || ''), 'error');
-      }}
-    }})
+      }
+    })
     .catch(e => showToast('Session error: ' + e, 'error'));
-}}
+}
 
-function stopSession() {{
-  fetch('/session/stop', {{method: 'POST'}})
+function stopSession() {
+  fetch('/session/stop', {method: 'POST'})
     .then(r => r.json())
-    .then(d => {{
-      if (d.ok) {{
+    .then(d => {
+      if (d.ok) {
         showToast('Session stopped', 'info');
         pollStatus();
         setTimeout(() => refreshGallery(false), 500);
-      }} else {{
+      } else {
         showToast('Stop session failed: ' + (d.error || ''), 'error');
-      }}
-    }})
+      }
+    })
     .catch(e => showToast('Session error: ' + e, 'error'));
-}}
+}
 
-function showDelConfirm(btn) {{
+function showDelConfirm(btn) {
   const wrap = btn.parentElement;
   btn.hidden = true;
   wrap.querySelector('.del-confirm').hidden = false;
-}}
+}
 
-function hideDelConfirm(btn) {{
+function hideDelConfirm(btn) {
   const wrap = btn.closest('.del-wrap');
   wrap.querySelector('.btn-del').hidden = false;
   wrap.querySelector('.del-confirm').hidden = true;
-}}
+}
 
-function deleteSession(btn, files) {{
+function deleteSession(btn, files) {
   const acc = btn.closest('.session-accordion');
   const name = decodeURIComponent(acc.getAttribute('data-session-name'));
-  fetch('/session/delete?name=' + encodeURIComponent(name) + (files ? '&files=1' : ''), {{method: 'POST'}})
+  fetch('/session/delete?name=' + encodeURIComponent(name) + (files ? '&files=1' : ''), {method: 'POST'})
     .then(r => r.json())
-    .then(d => {{
-      if (!d.ok) {{
+    .then(d => {
+      if (!d.ok) {
         showToast('Delete failed: ' + (d.error || ''), 'error');
         return;
-      }}
+      }
       showToast(files ? 'Session deleted, files removed.' : 'Session removed, captures kept.', 'success');
       pollStatus();
       setTimeout(() => refreshGallery(false), 400);
-    }})
+    })
     .catch(e => showToast('Delete error: ' + e, 'error'));
-}}
+}
 
-function deleteBatch(btn) {{
+function deleteBatch(btn) {
   const card = btn.closest('.batch-card');
   const name = card.getAttribute('data-batch-name');
-  fetch('/captures/delete?batch=' + encodeURIComponent(name), {{method: 'POST'}})
+  fetch('/captures/delete?batch=' + encodeURIComponent(name), {method: 'POST'})
     .then(r => r.json())
-    .then(d => {{
-      if (!d.ok) {{
+    .then(d => {
+      if (!d.ok) {
         showToast('Delete failed: ' + (d.error || ''), 'error');
         return;
-      }}
+      }
       showToast('Batch deleted: ' + name, 'success');
       setTimeout(() => refreshGallery(false), 400);
-    }})
+    })
     .catch(e => showToast('Delete error: ' + e, 'error'));
-}}
+}
 
-function pollStatus() {{
+function pollStatus() {
   fetch('/server-status')
     .then(r => r.json())
-    .then(d => {{
+    .then(d => {
       const pPill = document.getElementById('primaryPill');
       const sPill = document.getElementById('sessionPill');
       const sText = document.getElementById('sessionPillText');
       const secContainer = document.getElementById('secondariesPills');
 
-      if (!d.ok) {{
+      if (!d.ok) {
         pPill.className = 'live-pill offline';
         pPill.innerHTML = '<span class="live-dot"></span> Primary Down';
         sPill.style.display = 'none';
         secContainer.innerHTML = '';
         return;
-      }}
+      }
 
-      const p = d.primary || {{}};
+      const p = d.primary || {};
       pPill.className = 'live-pill online';
       pPill.innerHTML = '<span class="live-dot"></span> Primary (' + (p.cameras || 0) + ' cam' + (p.cameras === 1 ? '' : 's') + ')';
+      videoState = p.video || null;
+      updateRecordUI();
 
-      if (p.session) {{
+      if (p.session) {
         sPill.style.display = 'inline-flex';
         sPill.className = 'live-pill active-session';
-        sText.textContent = 'Active: ' + p.session;
-      }} else {{
+        sText.textContent = 'Active: ' + p.session + (p.session_kind === 'video' ? ' (Video)' : '');
+      } else {
         sPill.style.display = 'none';
-      }}
+      }
 
-      const secs = Object.entries(d.secondaries || {{}});
-      if (secs.length) {{
-        secContainer.innerHTML = secs.map(([k, v]) => {{
-          if (v.up) {{
-            return '<span class="live-pill online" title="' + v.addr + '"><span class="live-dot"></span> ' + k + ' (' + (v.cameras || 0) + ' cam)</span>';
-          }} else {{
+      const secs = Object.entries(d.secondaries || {});
+      if (secs.length) {
+        secContainer.innerHTML = secs.map(([k, v]) => {
+          if (v.up) {
+            return '<span class="live-pill online" title="' + v.addr + '"><span class="live-dot"></span> ' + k + ' (' + (v.cameras || 0) + ' cam)' + (v.recording ? ' · REC' : '') + '</span>';
+          } else {
             return '<span class="live-pill offline" title="' + v.addr + (v.error ? ' — ' + v.error : '') + '"><span class="live-dot"></span> ' + k + ' Down</span>';
-          }}
-        }}).join(' ');
-      }} else {{
+          }
+        }).join(' ');
+      } else {
         secContainer.innerHTML = '<span class="live-pill" style="opacity:0.7">0 secondaries</span>';
-      }}
-    }})
-    .catch(() => {{
+      }
+    })
+    .catch(() => {
       const pPill = document.getElementById('primaryPill');
       pPill.className = 'live-pill offline';
       pPill.innerHTML = '<span class="live-dot"></span> Connection Error';
-    }});
-}}
+    });
+}
 
 pollStatus();
 setInterval(pollStatus, 5000);
 initSortControls();
 applySorts();
+modeSync();"""
+
+
+def page_js(mode):
+    js = PAGE_JS.replace("__REFRESH_MS__", str(CAPTURE_REFRESH_MS)).replace("__PAGE_MODE__", mode)
+    if mode == "video":
+        js += "\n" + VIDEO_JS.replace("__REFRESH_MS__", str(CAPTURE_REFRESH_MS))
+    return js
+
+
+def base_page(mode, cards_content, session_settings=None):
+    title = "Capture Gallery" if mode == "photo" else "Video Capture"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<link rel="stylesheet" href="/static/photoswipe/photoswipe.css">
+<style>
+{PAGE_CSS}
+</style>
+</head>
+<body>
+
+{header_html(mode)}
+
+{main_html(mode, cards_content, session_settings)}
+
+<div class="modal-backdrop" id="purgeModal">
+  <div class="modal-box">
+    <h3>Purge Secondary Captures?</h3>
+    <p>This will permanently delete local capture files stored on registered secondary Pis to free up disk space. Captures already synced to the primary will not be affected.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closePurgeModal()">Cancel</button>
+      <button class="btn btn-primary" style="background:var(--accent-danger);border-color:var(--accent-danger);" id="btnConfirmPurge" onclick="confirmPurge()">Delete Captures</button>
+    </div>
+  </div>
+</div>
+
+{mobile_bar_html(mode)}
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+{page_js(mode)}
 </script>
 
 <script type="module">
@@ -1661,6 +2038,148 @@ initLightbox();
 </script>
 </body>
 </html>"""
+
+
+def gallery_html(sections):
+    return base_page("photo", gallery_cards_html(sections))
+
+
+def video_html(sections, session_settings=None):
+    return base_page("video", video_cards_html(sections), session_settings)
+
+
+VIDEO_JS = '''
+let videoState = null;
+let recTimer = null;
+
+function fmtElapsed(total) {
+  const s = Math.max(0, Math.floor(total));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = (m < 10 ? '0' : '') + m;
+  const ss = (sec < 10 ? '0' : '') + sec;
+  return h > 0 ? h + ':' + mm + ':' + ss : mm + ':' + ss;
+}
+
+function videoSettingsQuery() {
+  const res = document.getElementById('vidRes').value;
+  const fps = document.getElementById('vidFps').value;
+  const qual = document.getElementById('vidQual').value;
+  const durRaw = parseFloat(document.getElementById('vidDur').value);
+  const dur = (isNaN(durRaw) || durRaw < 0) ? 0 : durRaw;
+  return 'res=' + res + '&fps=' + fps + '&quality=' + qual + '&dur=' + dur;
+}
+
+function saveVideoSettings() {
+  try {
+    localStorage.setItem('mcVideoSettings', JSON.stringify({
+      res: document.getElementById('vidRes').value,
+      fps: document.getElementById('vidFps').value,
+      quality: document.getElementById('vidQual').value,
+      duration: document.getElementById('vidDur').value
+    }));
+  } catch (e) {}
+}
+
+function toggleRecord(btn) {
+  if (videoState && videoState.recording) stopRecord(btn);
+  else startRecord(btn);
+}
+
+function startRecord(btn) {
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> <span>Starting...</span>';
+  fetch('/video/start?' + videoSettingsQuery(), {method: 'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        saveVideoSettings();
+        showToast('Recording started: ' + (d.batch || ''), 'info', 6000);
+        pollStatus();
+      } else {
+        showToast('Record failed: ' + (d.error || 'Unknown error'), 'error');
+      }
+    })
+    .catch(e => showToast('Record error: ' + e, 'error'))
+    .finally(() => {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    });
+}
+
+function stopRecord(btn) {
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> <span>Stopping...</span>';
+  fetch('/video/stop', {method: 'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        showToast('Recording saved (' + Math.round(d.duration || 0) + 's): ' + (d.batch || ''), 'success');
+        pollStatus();
+        setTimeout(() => refreshGallery(false, '/video?partial=1'), __REFRESH_MS__);
+      } else {
+        showToast('Stop failed: ' + (d.error || ''), 'error');
+      }
+    })
+    .catch(e => showToast('Stop error: ' + e, 'error'))
+    .finally(() => {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    });
+}
+
+function updateRecordUI() {
+  const pill = document.getElementById('recPill');
+  if (!pill) return;
+  const btns = Array.from(document.querySelectorAll('#btnRecord, #btnRecordM'));
+  const text = document.getElementById('recPillText');
+  if (videoState && videoState.recording) {
+    const el = fmtElapsed(Date.now() / 1000 - (videoState.started || 0));
+    pill.hidden = false;
+    if (text) text.textContent = 'REC ' + el + ' · ' + (videoState.batch || '');
+    btns.forEach(b => {
+      if (b.disabled) return;
+      b.classList.add('btn-stop');
+      const t = b.querySelector('span:last-child');
+      if (t) t.textContent = 'Stop Recording';
+    });
+    if (!recTimer) recTimer = setInterval(updateRecordUI, 1000);
+  } else {
+    pill.hidden = true;
+    btns.forEach(b => {
+      b.classList.remove('btn-stop');
+      const t = b.querySelector('span:last-child');
+      if (t) t.textContent = 'Start Recording';
+    });
+    if (recTimer) {
+      clearInterval(recTimer);
+      recTimer = null;
+    }
+  }
+}
+
+function initVideoSettings() {
+  const grid = document.getElementById('videoSettings');
+  if (!grid) return;
+  if (grid.getAttribute('data-prefilled') === '1') return;
+  try {
+    const vs = JSON.parse(localStorage.getItem('mcVideoSettings') || '{}');
+    if (vs && typeof vs === 'object') {
+      if (vs.res) document.getElementById('vidRes').value = vs.res;
+      if (vs.fps) document.getElementById('vidFps').value = vs.fps;
+      if (vs.quality) document.getElementById('vidQual').value = vs.quality;
+      if (typeof vs.duration !== 'undefined') document.getElementById('vidDur').value = vs.duration;
+    }
+  } catch (e) {}
+}
+
+initVideoSettings();
+'''
+
+
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -1678,6 +2197,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path in ("/", ""):
             partial = "partial" in query and query["partial"][0] in ("1", "true")
             self._serve_gallery(partial=partial)
+        elif path == "/video":
+            partial = "partial" in query and query["partial"][0] in ("1", "true")
+            self._serve_video(partial=partial)
         elif path == "/server-status":
             self._send_json(200, self._server_status())
         elif path.startswith("/static/"):
@@ -1688,7 +2210,8 @@ class Handler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
         qs = urllib.parse.urlparse(self.path).query
         if path == "/capture":
             body = self._proxy("/remote-capture", timeout=10)
@@ -1701,6 +2224,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json(200, {"ok": body.get("ok", False), "secondaries": body.get("secondaries", {})})
         elif path in ("/session/start", "/session/stop", "/session/delete", "/captures/delete"):
             body = self._proxy(path + (f"?{qs}" if qs else ""), timeout=10)
+            self._send_json(200, body)
+        elif path == "/video/start":
+            body = self._proxy("/video/start" + (f"?{qs}" if qs else ""), timeout=30)
+            self._send_json(200, body)
+        elif path == "/video/stop":
+            body = self._proxy("/video/stop", timeout=30)
+            self._send_json(200, body)
+        elif path == "/mode":
+            body = self._proxy("/mode" + (f"?{qs}" if qs else ""), timeout=5)
             self._send_json(200, body)
         else:
             self._send_json(404, {"ok": False, "error": "not found"})
@@ -1731,6 +2263,7 @@ class Handler(SimpleHTTPRequestHandler):
                 data = json.loads(resp.read().decode())
                 entry["up"] = True
                 entry["cameras"] = data.get("cameras")
+                entry["recording"] = bool(data.get("recording"))
             except Exception as e:
                 entry["error"] = str(e)
             result["secondaries"][pi_id] = entry
@@ -1813,6 +2346,58 @@ class Handler(SimpleHTTPRequestHandler):
                 return s.get("batches", [])
         return []
 
+    def _load_sessions(self):
+        try:
+            with open(os.path.join(CAPTURES_DIR, "sessions.json")) as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def _video_sections(self):
+        by_name = {}
+        if os.path.isdir(CAPTURES_DIR):
+            for name in sorted(os.listdir(CAPTURES_DIR), reverse=True):
+                path = os.path.join(CAPTURES_DIR, name)
+                if os.path.isdir(path):
+                    entries = []
+                    for f in sorted(os.listdir(path)):
+                        if f.endswith(VIDEO_EXTENSIONS):
+                            try:
+                                size = os.path.getsize(os.path.join(path, f))
+                            except OSError:
+                                size = 0
+                            entries.append((f, size))
+                    if entries:
+                        by_name[name] = entries
+        sessions = self._load_sessions()
+        sections = []
+        active_settings = None
+        for s in reversed(sessions):
+            if s.get("kind", "image") != "video":
+                continue
+            if s.get("active") and s.get("video_settings"):
+                active_settings = s["video_settings"]
+            cards = [(b, by_name.pop(b, [])) for b in s.get("batches", []) if b in by_name]
+            if cards:
+                sections.append((s["name"], cards, True, session_created(s)))
+        if by_name:
+            ung_eps = [batch_epoch(n) for n in by_name]
+            ung_eps = [e for e in ung_eps if e is not None]
+            sections.append(("Ungrouped", [(n, e) for n, e in by_name.items()], False, max(ung_eps) if ung_eps else 0.0))
+        return sections, active_settings
+
+    def _serve_video(self, partial=False):
+        sections, active_settings = self._video_sections()
+        if partial:
+            body = video_cards_html(sections).encode("utf-8")
+        else:
+            body = video_html(sections, active_settings).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _serve_zip(self, target, query=None):
         groups = []
         if target == "multi":
@@ -1846,7 +2431,9 @@ class Handler(SimpleHTTPRequestHandler):
             with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
                 for folder, prefix in folders:
                     for fname in sorted(os.listdir(folder)):
-                        if fname.endswith(".jpg") and not fname.endswith("_thumb.jpg"):
+                        if fname.endswith("_thumb.jpg"):
+                            continue
+                        if fname.endswith(".jpg") or fname.endswith(VIDEO_EXTENSIONS):
                             zf.write(
                                 os.path.join(folder, fname),
                                 arcname=os.path.join(prefix, os.path.basename(folder), fname),
