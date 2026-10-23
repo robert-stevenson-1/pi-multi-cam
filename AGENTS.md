@@ -30,6 +30,14 @@ Video recording is a separate capture kind from photos: sessions in `sessions.js
 
 Picamera2 pipeline: on record start each camera is reconfigured to a lean `create_video_configuration` (4 buffers, no lores/raw — Pi 5/2GB budget, no preview anywhere), flipped via `Transform(hflip=1, vflip=1)` to match stills, then encoder/output pairs are tried defensively until one works (`H264Encoder` → `LibavH264Encoder` × `FfmpegOutput` (.mp4) → `PyavOutput` (.mp4) → `FileOutput` (.h264)). On stop, encoders finalize, cameras are restored to still configuration, and secondaries push their `<PI_ID>_cam<idx>.mp4` files. `video_recording_start/stop()` serialize through `capture_lock`; `video_lock` + `video_state` hold the shared recording state. The cam_server generates a `_thumb.jpg` from frame 0 of each uploaded/local video. GPIO on the primary in video mode toggles record start/stop (with gallery defaults).
 
+## Capabilities & still size
+
+`cam_server.py` reads each camera's `sensor_modes` at startup (`SENSOR_CAPS`, intersected across the Pi's own cameras; empty on failure) and derives a policy-limited ladder (`CAP_STREAM_LADDER` × `CAP_FPS_STEPS`, sizes ≤ `VID_MAX_STREAM`) so offered/accepted settings always fit the 2GB budget. `caps: {sizes: [...], full: [...]}` rides on both roles' `/status`; the gallery proxies it through `/server-status` and builds cascading dropdowns client-side (resolution list from caps; fps steps ≤ that size's max; legacy `1080`/`720` values translated; falls back to static presets when caps are missing). Settings sent by anything are still clamped in `normalise_video_settings` / `normalise_still_size` — never trust the client.
+
+Still resolution is a shared device state (`still_state`/`ensure_still_config`): set from the photo page (Select changes `POST /still-size?size=full|WxH`), fanned out with every remote capture (`/capture?batch=&size=`), honored by GPIO/keyboard captures, remembered on the active image session (`still_size`), and re-applied after video recording ends. Reconfiguration happens lazily inside `grab_frames()` under `capture_lock` only when the size changed.
+
+Ungrouped cleanup: `POST /captures/delete-all?kind=image|video` deletes every batch folder not owned by a session (image kind: folders with no video files; video kind: folders with video — refused while recording). The gallery exposes it as a counted red `Delete Ungrouped (N)` button in each page's subbar with the standard two-step confirm.
+
 ## Run
 
 ```bash
@@ -51,7 +59,8 @@ Config is read from `.env` (loaded by both scripts at startup, fallback to in-co
 - `AF_MODE`: `"continuous"` vs `"interval"` (manual AF trigger every 5s via private `_last_af_trigger` attr).
 - `GPIO_TRIGGER_PIN`: BCM pin, `-1` disables; active-low, 0.5s software debounce.
 - `CAPTURES_DIR`: output directory.
-- `VID_RES` / `VID_FPS` / `VID_QUALITY` / `VID_DURATION`: video recording defaults used when no settings arrive (gallery sends them per start).
+- `VID_RES` / `VID_FPS` / `VID_QUALITY` / `VID_DURATION`: video settings fallback defaults when no settings arrive (the gallery sends them per start).
+- `VID_MAX_RES`: stream/memory ceiling for offered and accepted sizes (default `1080` = 1920×1080; `720` also allowed). Both video resolutions and still resolutions are clamped to this.
 
 `web_gallery.py` knobs: `PORT`, `CAPTURES_DIR`, `PRIMARY_HOST`/`PRIMARY_PORT` (proxy target for controls; defaults to `127.0.0.1:8080`), `CAPTURE_REFRESH_MS` (delay before the gallery auto-reloads after "Capture All", default 1000). `GET /server-status` combines the primary `/status` response with direct pings to each registered secondary's `/status`; the gallery header polls it every five seconds and shows a red `Primary Down` pill when the primary backend is unreachable. The gallery serves two pages — `/` (Photos) and `/video` (Video) — switched by mode tabs in the header that also `POST /mode` so the primary's GPIO/keyboard behavior follows the page being viewed; each page renders only its kind's sessions/batches (server-side classification by content: a folder containing `.mp4`/`.h264` files is a video batch). `VIDEO_EXTENSIONS`/`video_cards_html`/`video_html`/`base_page`/`PAGE_JS` (shared JS as a plain-string constant with `__REFRESH_MS__`/`__PAGE_MODE__` tokens) in `web_gallery.py`. `cam_preview.py` uses its own `PREVIEW_PORT` (default `9090`) and `SIZE` (default `640x480`).
 
