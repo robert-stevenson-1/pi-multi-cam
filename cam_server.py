@@ -71,10 +71,36 @@ except Exception as e:
     print(f"Camera enumeration failed, probing 0-1: {e}")
     camera_count = 2
 
+def _read_sensor_caps(cam):
+    try:
+        modes = cam.sensor_modes
+    except Exception as e:
+        print(f"WARNING: reading sensor modes failed: {e}")
+        return []
+    best = {}
+    for m in modes:
+        size = m.get("size")
+        if not size:
+            continue
+        try:
+            w, h = int(size[0]), int(size[1])
+            fps = float(m.get("fps") or 0)
+        except (TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0 or fps < 5:
+            continue
+        cur = best.get((w, h))
+        if cur is None or fps > cur:
+            best[(w, h)] = fps
+    return [{"size": [w, h], "fps": round(f, 2)} for (w, h), f in sorted(best.items())]
+
+
 cameras = []
+per_cam_caps = []
 for i in range(camera_count):
     try:
         cam = Picamera2(i)
+        caps = _read_sensor_caps(cam)
         config = cam.create_still_configuration()
         cam.configure(config)
         if AF_MODE == "continuous":
@@ -83,6 +109,7 @@ for i in range(camera_count):
             cam.set_controls({"AfMode": controls.AfModeEnum.Auto})
         cam.start()
         cameras.append(cam)
+        per_cam_caps.append(caps)
         print(f"Camera {i} connected. Resolution: {cam.stream_configuration()['size']}")
     except Exception as e:
         print(f"Camera {i} not connected: {e}")
@@ -132,31 +159,6 @@ VID_MAX_STREAM = VID_SIZES.get(VID_MAX_RES, VID_SIZES["1080"])
 CAP_STREAM_LADDER = [(1920, 1080), (1280, 720), (960, 540), (640, 360)]
 CAP_FPS_STEPS = (15, 30, 60, 120)
 
-
-def _read_sensor_caps(cam):
-    try:
-        modes = cam.sensor_modes
-    except Exception as e:
-        print(f"WARNING: reading sensor modes failed: {e}")
-        return []
-    best = {}
-    for m in modes:
-        size = m.get("size")
-        if not size:
-            continue
-        try:
-            w, h = int(size[0]), int(size[1])
-            fps = float(m.get("fps") or 0)
-        except (TypeError, ValueError):
-            continue
-        if w <= 0 or h <= 0 or fps < 5:
-            continue
-        cur = best.get((w, h))
-        if cur is None or fps > cur:
-            best[(w, h)] = fps
-    return [{"size": [w, h], "fps": round(f, 2)} for (w, h), f in sorted(best.items())]
-
-
 def _intersect_caps(a, b):
     if not a or not b:
         return a or b
@@ -165,13 +167,12 @@ def _intersect_caps(a, b):
 
 
 SENSOR_CAPS = []
-if cameras:
-    per_cam = [_read_sensor_caps(cam) for cam in cameras]
-    _caps = per_cam[0]
-    for c in per_cam[1:]:
+if per_cam_caps:
+    _caps = per_cam_caps[0]
+    for c in per_cam_caps[1:]:
         _caps = _intersect_caps(_caps, c)
     SENSOR_CAPS = _caps
-    print(f"Sensor modes (intersection over {len(cameras)} camera(s)): {SENSOR_CAPS}")
+    print(f"Sensor modes (intersection over {len(per_cam_caps)} camera(s)): {SENSOR_CAPS}")
 
 
 def max_fps_for_size(w, h):
