@@ -13,6 +13,23 @@ Multi-Pi synchronized capture on Raspberry Pi 5. Core services use the standard 
 - Validate by inspection only; `python3 -m py_compile cam_server.py cam_preview.py web_gallery.py pispot.py` works for syntax.
 - `gpiod` import and setup are guarded and degrade gracefully — keep any GPIO failure from stopping camera service startup.
 
+## Remote dev on the PIPS Pis (optional)
+
+On the PIPS network the Pis are reachable over SSH, and they are the only place this code can actually run. Probe before every remote session:
+
+```bash
+getent hosts pi-cam-0.local
+ssh -o BatchMode=yes -o ConnectTimeout=3 pi@pi-cam-0.local true
+```
+
+If either fails, stay local and say so — no retry loops, no interactive password prompts. `~/.ssh/config` maps `pi-cam-*.local` (and bare `pi-cam-*`) to user `pi` with the passphrase-less `~/.ssh/id_ed25519_pips`; its public key must be in `/home/pi/.ssh/authorized_keys` on each Pi.
+
+- Hosts: `pi-cam-0.local` is the primary (`PI_ID=pi0`), `pi-cam-1.local` … `pi-cam-3.local` the secondaries. Repo is `/home/pi/pi-multi-cam`, logs in `.run/`, systemd units `picam_primary.service` / `picam_secondary.service`.
+- Deploy: commit and push here, then `ssh pi@<host> 'cd /home/pi/pi-multi-cam && git pull --ff-only'`, `ssh pi@<host> 'cd /home/pi/pi-multi-cam && python3 -m py_compile cam_server.py cam_preview.py web_gallery.py pispot.py'`, then `./launch_primary.sh restart` or `./launch_secondary.sh restart`; check with `./launch_*.sh status` and `tail .run/*.log`. Restart secondaries after the primary.
+- No sudo: never run `sudo`, `systemctl`, `apt`, or edit unit files on a Pi; ask the user for privileged actions. Restart through the launch scripts only.
+- Inspect before pulling: a dirty Pi checkout makes `--ff-only` fail — report it, never reset or stash on the device. `git pull` needs outbound HTTPS; if `ssh pi@<host> 'curl -sI https://github.com'` fails, stop instead of improvising.
+- Safety rails: only one process may own the cameras (`cam_preview.py` must be stopped before `cam_server.py`), never trigger captures or recordings, never touch `captures/` or `.env` on a Pi, and never run sync/purge or `pispot.py` remotely.
+
 ## Architecture
 
 Shared **active-low** button wired to every Pi's `GPIO_TRIGGER_PIN` (pull-up set in software, no external resistor). A press makes all Pis capture simultaneously via hardware — the network is only used *after* capture for secondaries to push frames to the primary.
