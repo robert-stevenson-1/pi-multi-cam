@@ -1420,8 +1420,30 @@ def header_html(mode):
 </header>"""
 
 
-def subbar_html():
-    return """<div class="gallery-subbar">
+def subbar_html(mode, ungrouped_count=0):
+    del_ung = ""
+    if ungrouped_count > 0:
+        label = "batch" if ungrouped_count == 1 else "batches"
+        del_ung = f"""<span class="del-wrap">
+        <button class="btn-zip btn-del" data-kind="{mode}" onclick="showDelConfirm(this)">Delete Ungrouped ({ungrouped_count})</button>
+        <span class="del-confirm" hidden>
+          <button class="btn-zip btn-del-files" onclick="deleteUngrouped(this)">Delete {ungrouped_count} {label}</button>
+          <button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>
+        </span>
+      </span>"""
+    still_res = ""
+    if mode == "photo":
+        still_res = """<label class="sort-group">Photo resolution
+        <select class="select-sort" id="stillRes">
+          <option value="full">Full sensor</option>
+          <option value="1920x1080">1920 × 1080</option>
+          <option value="1280x720">1280 × 720</option>
+          <option value="960x540">960 × 540</option>
+          <option value="640x480">640 × 480</option>
+        </select>
+      </label>
+      <span style="color:var(--border-strong)">·</span>"""
+    return f"""<div class="gallery-subbar">
     <div class="view-controls">
       <label class="sort-group">Sessions
         <select class="select-sort" id="selSortSessions" onchange="setSort('sessions', this.value)">
@@ -1442,6 +1464,7 @@ def subbar_html():
           <option value="device">Device cam ID</option>
         </select>
       </label>
+      {still_res}
       <button class="btn-text" onclick="toggleAllAccordions(true)">Expand All</button>
       <span style="color:var(--border-strong)">·</span>
       <button class="btn-text" onclick="toggleAllAccordions(false)">Collapse All</button>
@@ -1449,15 +1472,16 @@ def subbar_html():
       <button class="btn-text" id="btnSelectMode" onclick="toggleSelectMode()">Select</button>
       <button class="btn-text" id="btnSelectAllBtn" onclick="toggleSelectAll()" hidden>Select All</button>
       <button class="btn btn-primary btn-batch-dl" id="btnBatchDl" onclick="downloadSelected()" hidden>Download Selected (0)</button>
+      {del_ung}
     </div>
   </div>"""
 
 
-def main_html(mode, cards_content, session_settings=None):
+def main_html(mode, cards_content, session_settings=None, ungrouped_count=0):
     if mode == "photo":
         return f"""<main class="main-content">
   <div class="gallery-subbar">
-    {subbar_html()}
+    {subbar_html("photo", ungrouped_count)}
   </div>
 
   <div id="galleryContainer">
@@ -1478,7 +1502,7 @@ def main_html(mode, cards_content, session_settings=None):
     <p class="settings-note">Settings apply to every Pi in the next recording and are saved with the active video session. Each camera records its own file; no live preview is shown.</p>
   </div>
   <div class="gallery-subbar">
-    {subbar_html()}
+    {subbar_html("video", ungrouped_count)}
   </div>
 
   <div id="galleryContainer">
@@ -1525,6 +1549,89 @@ function modeSync() {
 }
 
 function updateRecordUI() {}
+
+let uiSizes = null;
+let uiFull = null;
+let capsSig = "";
+
+function intersectSizes(a, b) {
+  const set = new Set(b.map(e => e.size[0] + 'x' + e.size[1]));
+  return a.filter(e => set.has(e.size[0] + 'x' + e.size[1]));
+}
+
+function applyCaps(p, secs) {
+  const caps = (p || {}).caps;
+  if (!caps || !Array.isArray(caps.sizes) || !caps.sizes.length) return;
+  let sizes = caps.sizes;
+  Object.values(secs || {}).forEach(v => {
+    const s = v && v.up && v.caps && v.caps.sizes;
+    if (Array.isArray(s) && s.length) sizes = intersectSizes(sizes, s);
+  });
+  if (!sizes.length) return;
+  uiSizes = sizes;
+  uiFull = caps.full || null;
+  const sig = JSON.stringify(sizes) + '|' + JSON.stringify(uiFull);
+  if (sig === capsSig) return;
+  capsSig = sig;
+  rebuildVideoSizes();
+  rebuildStillSizes();
+}
+
+function rebuildVideoSizes() {
+  const resSel = document.getElementById('vidRes');
+  if (!resSel) return;
+  const legacy = {'1080': '1920x1080', '720': '1280x720'};
+  let cur = resSel.value;
+  if (legacy[cur]) cur = legacy[cur];
+  resSel.innerHTML = uiSizes.map(e =>
+    '<option value="' + e.size[0] + 'x' + e.size[1] + '">' + e.size[0] + ' × ' + e.size[1] + '</option>'
+  ).join('');
+  const has = Array.from(resSel.options).some(o => o.value === cur);
+  resSel.value = has ? cur : resSel.options[0].value;
+  rebuildVideoFps();
+}
+
+function rebuildVideoFps() {
+  const resSel = document.getElementById('vidRes');
+  const fpsSel = document.getElementById('vidFps');
+  if (!fpsSel || !uiSizes) return;
+  const parts = (resSel.value || '').split('x');
+  const e = uiSizes.find(s => String(s.size[0]) === parts[0] && String(s.size[1]) === parts[1]);
+  const cap = e ? e.fps : 0;
+  const steps = [15, 30, 60, 120].filter(f => f <= cap);
+  if (!steps.length) return;
+  const cur = parseInt(fpsSel.value, 10) || 30;
+  fpsSel.innerHTML = steps.map(f => '<option value="' + f + '">' + f + ' fps</option>').join('');
+  fpsSel.value = steps.indexOf(cur) >= 0 ? String(cur) : String(steps[steps.length - 1]);
+}
+
+function rebuildStillSizes() {
+  const sel = document.getElementById('stillRes');
+  if (!sel) return;
+  const cur = sel.value;
+  let html = '<option value="full">Full sensor' + (uiFull ? ' (' + uiFull[0] + ' × ' + uiFull[1] + ')' : '') + '</option>';
+  html += uiSizes.map(e =>
+    '<option value="' + e.size[0] + 'x' + e.size[1] + '">' + e.size[0] + ' × ' + e.size[1] + '</option>'
+  ).join('');
+  sel.innerHTML = html;
+  const has = Array.from(sel.options).some(o => o.value === cur);
+  sel.value = has ? cur : 'full';
+}
+
+function deleteUngrouped(btn) {
+  const kind = btn.closest('.del-wrap').querySelector('.btn-del').getAttribute('data-kind') || 'image';
+  fetch('/captures/delete-all?kind=' + kind, {method: 'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        showToast('Delete failed: ' + (d.error || ''), 'error');
+        return;
+      }
+      showToast('Deleted ' + d.removed + ' ungrouped batch(es) (' + Math.round((d.freed || 0) / 1048576) + ' MB freed)', 'success');
+      setTimeout(() => refreshGallery(false), 400);
+    })
+    .catch(e => showToast('Delete error: ' + e, 'error'));
+}
 
 function showToast(message, type = 'info', duration = 4000) {
   const container = document.getElementById('toastContainer');
@@ -1949,6 +2056,7 @@ function pollStatus() {
       pPill.className = 'live-pill online';
       pPill.innerHTML = '<span class="live-dot"></span> Primary (' + (p.cameras || 0) + ' cam' + (p.cameras === 1 ? '' : 's') + ')';
       videoState = p.video || null;
+      applyCaps(p, d.secondaries || {});
       updateRecordUI();
 
       if (p.session) {
@@ -1979,6 +2087,12 @@ function pollStatus() {
     });
 }
 
+const stillSel = document.getElementById('stillRes');
+if (stillSel) stillSel.addEventListener('change', () => {
+  fetch('/still-size?size=' + encodeURIComponent(stillSel.value), {method: 'POST'}).catch(() => {});
+});
+const vidResSel = document.getElementById('vidRes');
+if (vidResSel) vidResSel.addEventListener('change', rebuildVideoFps);
 pollStatus();
 setInterval(pollStatus, 5000);
 initSortControls();
@@ -1993,7 +2107,7 @@ def page_js(mode):
     return js
 
 
-def base_page(mode, cards_content, session_settings=None):
+def base_page(mode, cards_content, session_settings=None, ungrouped_count=0):
     title = "Capture Gallery" if mode == "photo" else "Video Capture"
     return f"""<!doctype html>
 <html lang="en">
@@ -2010,7 +2124,7 @@ def base_page(mode, cards_content, session_settings=None):
 
 {header_html(mode)}
 
-{main_html(mode, cards_content, session_settings)}
+{main_html(mode, cards_content, session_settings, ungrouped_count)}
 
 <div class="modal-backdrop" id="purgeModal">
   <div class="modal-box">
@@ -2040,12 +2154,12 @@ initLightbox();
 </html>"""
 
 
-def gallery_html(sections):
-    return base_page("photo", gallery_cards_html(sections))
+def gallery_html(sections, ungrouped_count=0):
+    return base_page("photo", gallery_cards_html(sections), ungrouped_count=ungrouped_count)
 
 
-def video_html(sections, session_settings=None):
-    return base_page("video", video_cards_html(sections), session_settings)
+def video_html(sections, session_settings=None, ungrouped_count=0):
+    return base_page("video", video_cards_html(sections), session_settings, ungrouped_count)
 
 
 VIDEO_JS = '''
@@ -2222,7 +2336,7 @@ class Handler(SimpleHTTPRequestHandler):
         elif path == "/purge-secondaries":
             body = self._proxy("/purge-secondaries", timeout=60)
             self._send_json(200, {"ok": body.get("ok", False), "secondaries": body.get("secondaries", {})})
-        elif path in ("/session/start", "/session/stop", "/session/delete", "/captures/delete"):
+        elif path in ("/session/start", "/session/stop", "/session/delete", "/captures/delete", "/captures/delete-all", "/still-size"):
             body = self._proxy(path + (f"?{qs}" if qs else ""), timeout=10)
             self._send_json(200, body)
         elif path == "/video/start":
@@ -2264,6 +2378,7 @@ class Handler(SimpleHTTPRequestHandler):
                 entry["up"] = True
                 entry["cameras"] = data.get("cameras")
                 entry["recording"] = bool(data.get("recording"))
+                entry["caps"] = data.get("caps")
             except Exception as e:
                 entry["error"] = str(e)
             result["secondaries"][pi_id] = entry
@@ -2306,6 +2421,7 @@ class Handler(SimpleHTTPRequestHandler):
             cards = [(b, by_name.pop(b, [])) for b in s.get("batches", []) if b in by_name]
             if cards:
                 sections.append((s["name"], cards, True, session_created(s)))
+        une = len(by_name)
         if by_name:
             ung_eps = [batch_epoch(n) for n in by_name]
             ung_eps = [e for e in ung_eps if e is not None]
@@ -2313,7 +2429,7 @@ class Handler(SimpleHTTPRequestHandler):
         if partial:
             body = gallery_cards_html(sections).encode("utf-8")
         else:
-            body = gallery_html(sections).encode("utf-8")
+            body = gallery_html(sections, une).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -2384,14 +2500,14 @@ class Handler(SimpleHTTPRequestHandler):
             ung_eps = [batch_epoch(n) for n in by_name]
             ung_eps = [e for e in ung_eps if e is not None]
             sections.append(("Ungrouped", [(n, e) for n, e in by_name.items()], False, max(ung_eps) if ung_eps else 0.0))
-        return sections, active_settings
+        return sections, active_settings, len(by_name)
 
     def _serve_video(self, partial=False):
-        sections, active_settings = self._video_sections()
+        sections, active_settings, ungrouped_count = self._video_sections()
         if partial:
             body = video_cards_html(sections).encode("utf-8")
         else:
-            body = video_html(sections, active_settings).encode("utf-8")
+            body = video_html(sections, active_settings, ungrouped_count).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
