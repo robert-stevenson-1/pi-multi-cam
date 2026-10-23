@@ -311,6 +311,7 @@ body {
 .live-pill.offline { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
 .live-pill.offline .live-dot { background: #ef4444; }
 .live-pill.active-session { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+.live-pill.warn { background: #fffbeb; color: #92400e; border-color: #fde68a; }
 
 .controls-bar {
   display: flex;
@@ -1473,6 +1474,7 @@ def subbar_html(mode, ungrouped_count=0):
       <button class="btn-text" id="btnSelectAllBtn" onclick="toggleSelectAll()" hidden>Select All</button>
       <button class="btn btn-primary btn-batch-dl" id="btnBatchDl" onclick="downloadSelected()" hidden>Download Selected (0)</button>
       {del_ung}
+      <span class="live-pill warn" id="capsPill" hidden title="No camera capability data">Defaults — no camera data</span>
     </div>
   </div>"""
 
@@ -2057,6 +2059,23 @@ function pollStatus() {
       pPill.innerHTML = '<span class="live-dot"></span> Primary (' + (p.cameras || 0) + ' cam' + (p.cameras === 1 ? '' : 's') + ')';
       videoState = p.video || null;
       applyCaps(p, d.secondaries || {});
+      const capsPill = document.getElementById('capsPill');
+      if (capsPill) {
+        const capsData = p.caps;
+        const capsOk = Array.isArray(capsData && capsData.sizes) && capsData.sizes.length;
+        capsPill.hidden = !!capsOk;
+        if (!capsOk) {
+          capsPill.setAttribute('title', (capsData && capsData.error) ? capsData.error : 'no capability data from primary');
+          if (!window.capsWarned) {
+            window.capsWarned = true;
+            showToast(capsData && capsData.error
+              ? 'Camera settings unavailable: ' + capsData.error + ' — using default presets.'
+              : 'No camera data from primary (restart cam_server to enable real settings) — using default presets.', 'info', 6000);
+          }
+        } else {
+          window.capsWarned = false;
+        }
+      }
       updateRecordUI();
 
       if (p.session) {

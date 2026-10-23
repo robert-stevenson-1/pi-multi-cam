@@ -203,7 +203,10 @@ def stream_caps():
 
 def caps_payload():
     full = full_sensor_size()
-    return {"sizes": stream_caps(), "full": list(full) if full else None}
+    payload = {"sizes": stream_caps(), "full": list(full) if full else None}
+    if not SENSOR_CAPS:
+        payload["error"] = "sensor modes unavailable"
+    return payload
 
 
 def parse_size_token(tok):
