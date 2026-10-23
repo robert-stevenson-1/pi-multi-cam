@@ -608,6 +608,11 @@ class Primary:
             for s in self.sessions:
                 if name in s.get("batches", []):
                     return {"ok": False, "error": f"batch belongs to session '{s['name']}'"}
+            with video_lock:
+                recording = video_state["recording"]
+                active_batch = video_state["batch"]
+            if recording and name == active_batch:
+                return {"ok": False, "error": "batch is being recorded; stop recording first"}
             p = os.path.join(CAPTURES_DIR, name)
             if not os.path.isdir(p):
                 return {"ok": False, "error": "unknown batch"}
@@ -631,16 +636,17 @@ class Primary:
 
     def delete_ungrouped_all(self, kind="image"):
         with self.lock:
-            owned = {b for s in self.sessions for b in s.get("batches", [])}
-            names = sorted(os.listdir(CAPTURES_DIR)) if os.path.isdir(CAPTURES_DIR) else []
             with video_lock:
                 recording = video_state["recording"]
-            if kind == "video" and recording:
-                return {"ok": False, "error": "video recording in progress"}
+                active_batch = video_state["batch"]
+            if recording:
+                return {"ok": False, "error": "stop recording before deleting captures"}
+            owned = {b for s in self.sessions for b in s.get("batches", [])}
+            names = sorted(os.listdir(CAPTURES_DIR)) if os.path.isdir(CAPTURES_DIR) else []
             removed = 0
             freed = 0
             for name in names:
-                if name == "sessions.json" or name in owned:
+                if name == "sessions.json" or name in owned or name == active_batch:
                     continue
                 p = os.path.join(CAPTURES_DIR, name)
                 if not os.path.isdir(p):
