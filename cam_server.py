@@ -54,6 +54,7 @@ VID_RES = os.getenv("VID_RES", "1080")
 VID_FPS = int(os.getenv("VID_FPS", "30"))
 VID_QUALITY = os.getenv("VID_QUALITY", "medium")
 VID_DURATION = float(os.getenv("VID_DURATION", "0"))
+VID_MAX_RES = os.getenv("VID_MAX_RES", "1080")
 
 MODE = MODE.strip().lower()
 if MODE in ("p", "primary"):
@@ -127,17 +128,121 @@ video_state = {"recording": False, "batch": None, "started": 0.0, "recs": [], "t
 VID_SIZES = {"1080": (1920, 1080), "720": (1280, 720)}
 VID_BITRATES = {"low": 4000000, "medium": 10000000, "high": 20000000}
 VIDEO_EXTENSIONS = (".mp4", ".h264")
+VID_MAX_STREAM = VID_SIZES.get(VID_MAX_RES, VID_SIZES["1080"])
+CAP_STREAM_LADDER = [(1920, 1080), (1280, 720), (960, 540), (640, 360)]
+CAP_FPS_STEPS = (15, 30, 60, 120)
+
+
+def _read_sensor_caps(cam):
+    try:
+        modes = cam.sensor_modes
+    except Exception as e:
+        print(f"WARNING: reading sensor modes failed: {e}")
+        return []
+    best = {}
+    for m in modes:
+        size = m.get("size")
+        if not size:
+            continue
+        try:
+            w, h = int(size[0]), int(size[1])
+            fps = float(m.get("fps") or 0)
+        except (TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0 or fps < 5:
+            continue
+        cur = best.get((w, h))
+        if cur is None or fps > cur:
+            best[(w, h)] = fps
+    return [{"size": [w, h], "fps": round(f, 2)} for (w, h), f in sorted(best.items())]
+
+
+def _intersect_caps(a, b):
+    if not a or not b:
+        return a or b
+    sizes = {(e["size"][0], e["size"][1]) for e in a} & {(e["size"][0], e["size"][1]) for e in b}
+    return [e for e in a if (e["size"][0], e["size"][1]) in sizes]
+
+
+SENSOR_CAPS = []
+if cameras:
+    per_cam = [_read_sensor_caps(cam) for cam in cameras]
+    _caps = per_cam[0]
+    for c in per_cam[1:]:
+        _caps = _intersect_caps(_caps, c)
+    SENSOR_CAPS = _caps
+    print(f"Sensor modes (intersection over {len(cameras)} camera(s)): {SENSOR_CAPS}")
+
+
+def max_fps_for_size(w, h):
+    fps = 0
+    for e in SENSOR_CAPS:
+        mw, mh = e["size"]
+        if mw >= w and mh >= h:
+            fps = max(fps, e["fps"])
+    return fps
+
+
+def full_sensor_size():
+    if not SENSOR_CAPS:
+        return None
+    return max(SENSOR_CAPS, key=lambda e: e["size"][0] * e["size"][1])["size"]
+
+
+def stream_caps():
+    capw, caph = VID_MAX_STREAM
+    out = []
+    for w, h in CAP_STREAM_LADDER:
+        if w > capw or h > caph:
+            continue
+        fps = max_fps_for_size(w, h)
+        if fps >= 10:
+            out.append({"size": [w, h], "fps": round(fps, 2)})
+    return out
+
+
+def caps_payload():
+    full = full_sensor_size()
+    return {"sizes": stream_caps(), "full": list(full) if full else None}
+
+
+def parse_size_token(tok):
+    m = re.match(r"^(\d{2,5})x(\d{2,5})$", str(tok or ""))
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)))
+
+
+def resolve_stream_size(res):
+    token = str(res or "")
+    size = parse_size_token(token)
+    if size is None and token in VID_SIZES:
+        size = VID_SIZES[token]
+    if size is None and VID_RES in VID_SIZES:
+        size = VID_SIZES[VID_RES]
+    if size is None:
+        size = VID_SIZES["1080"]
+    entries = stream_caps()
+    if not entries:
+        return size
+    for e in entries:
+        if tuple(e["size"]) == size:
+            return size
+    return tuple(entries[0]["size"])
 
 
 def normalise_video_settings(st):
-    res = str(st.get("res") or VID_RES)
-    if res not in VID_SIZES:
-        res = "1080"
+    size = resolve_stream_size(st.get("res"))
+    entries = stream_caps()
+    if entries:
+        steps = fps_steps_for_size(size[0], size[1])
+    else:
+        steps = [15, 30]
     try:
         fps = int(st.get("fps") or VID_FPS)
     except (TypeError, ValueError):
         fps = VID_FPS
-    fps = 30 if fps > 15 else 15
+    fps = min(steps, key=lambda f: (abs(f - fps), f))
     quality = str(st.get("quality") or VID_QUALITY)
     if quality not in VID_BITRATES:
         quality = "medium"
@@ -145,7 +250,59 @@ def normalise_video_settings(st):
         duration = float(st.get("duration") or 0)
     except (TypeError, ValueError):
         duration = 0.0
-    return {"res": res, "fps": max(1, fps), "quality": quality, "duration": max(0.0, duration)}
+    return {"res": f"{size[0]}x{size[1]}", "fps": fps, "quality": quality, "duration": max(0.0, duration)}
+
+
+def fps_steps_for_size(w, h):
+    cap = max_fps_for_size(w, h)
+    steps = [f for f in CAP_FPS_STEPS if f <= cap]
+    return steps or [5]
+
+
+def normalise_still_size(token):
+    t = str(token or "").strip().lower()
+    if t in ("", "full", "sensor", "none", "0"):
+        return None
+    size = parse_size_token(t)
+    if size is None:
+        return None
+    full = full_sensor_size()
+    capw, caph = VID_MAX_STREAM
+    limits = []
+    if full:
+        limits.append(full)
+    limits.append((capw, caph))
+    for lw, lh in limits:
+        if size[0] > lw or size[1] > lh:
+            size = (min(size[0], lw), min(size[1], lh))
+    return size
+
+
+still_state = {"size": None}
+applied_still_size = {"size": None}
+
+
+def ensure_still_config():
+    desired = still_state["size"]
+    if applied_still_size["size"] == desired:
+        return
+    for cam in cameras:
+        try:
+            cam.stop()
+        except Exception:
+            pass
+        try:
+            cfg = cam.create_still_configuration(
+                main={} if desired is None else {"size": list(desired)})
+            cam.configure(cfg)
+            if AF_MODE == "continuous":
+                cam.set_controls({"AfMode": controls.AfModeEnum.Continuous})
+            else:
+                cam.set_controls({"AfMode": controls.AfModeEnum.Auto})
+            cam.start()
+        except Exception as e:
+            print(f"WARNING: still reconfiguration failed: {e}")
+    applied_still_size["size"] = desired
 
 
 def video_settings_from_qs(qs):
@@ -190,7 +347,7 @@ def video_output_factories(path_base):
 
 
 def start_cam_recording(cam, path_base, st):
-    size = VID_SIZES[st["res"]]
+    size = parse_size_token(st["res"]) or VID_MAX_STREAM
     bitrate = VID_BITRATES[st["quality"]]
     vid_ctrl = {"FrameRate": st["fps"]}
     if AF_MODE == "continuous":
@@ -227,6 +384,7 @@ def restore_still_config(cam):
         else:
             cam.set_controls({"AfMode": controls.AfModeEnum.Auto})
         cam.start()
+        applied_still_size["size"] = None
     except Exception as e:
         print(f"WARNING: camera restore to stills failed: {e}")
 
@@ -322,6 +480,7 @@ def valid_upload_name(fname):
 
 
 def grab_frames():
+    ensure_still_config()
     frames = []
     for cam in cameras:
         if AF_MODE == "interval":
@@ -466,6 +625,38 @@ class Primary:
                     break
         return batch
 
+    def delete_ungrouped_all(self, kind="image"):
+        with self.lock:
+            owned = {b for s in self.sessions for b in s.get("batches", [])}
+            names = sorted(os.listdir(CAPTURES_DIR)) if os.path.isdir(CAPTURES_DIR) else []
+            with video_lock:
+                recording = video_state["recording"]
+            if kind == "video" and recording:
+                return {"ok": False, "error": "video recording in progress"}
+            removed = 0
+            freed = 0
+            for name in names:
+                if name == "sessions.json" or name in owned:
+                    continue
+                p = os.path.join(CAPTURES_DIR, name)
+                if not os.path.isdir(p):
+                    continue
+                has_video = any(f.endswith(VIDEO_EXTENSIONS) for f in os.listdir(p))
+                if (kind == "video") != has_video:
+                    continue
+                for f in os.listdir(p):
+                    try:
+                        freed += os.path.getsize(os.path.join(p, f))
+                    except OSError:
+                        pass
+                shutil.rmtree(p, ignore_errors=True)
+                removed += 1
+            for field in ("current_batch", "current_video_batch"):
+                v = getattr(self, field, None)
+                if v and not os.path.isdir(v):
+                    setattr(self, field, None)
+            return {"ok": True, "kind": kind, "removed": removed, "freed": freed}
+
     def do_capture(self, remote=False):
         with capture_lock:
             with video_lock:
@@ -482,6 +673,7 @@ class Primary:
             result = {"ok": True, "batch": os.path.basename(batch)}
         if remote:
             self.fire_secondaries(os.path.basename(batch))
+        self._attach_still_settings(os.path.basename(batch), still_state["size"])
         return result
 
     def fire_secondaries(self, batch):
@@ -494,7 +686,9 @@ class Primary:
             t.join(timeout=3)
 
     def _trigger(self, pi_id, ip, port, batch):
-        url = f"http://{ip}:{port}/capture?batch={batch}"
+        size = still_state["size"]
+        qs = f"batch={batch}" + (f"&size={size[0]}x{size[1]}" if size else "")
+        url = f"http://{ip}:{port}/capture?{qs}"
         try:
             urllib.request.urlopen(url, timeout=3)
         except Exception as e:
@@ -537,6 +731,14 @@ class Primary:
             for s in self.sessions:
                 if batch_name in s.get("batches", []):
                     s["video_settings"] = st
+                    self._save_sessions()
+                    break
+
+    def _attach_still_settings(self, batch_name, size):
+        with self.lock:
+            for s in self.sessions:
+                if batch_name in s.get("batches", []):
+                    s["still_size"] = list(size) if size else None
                     self._save_sessions()
                     break
 
@@ -795,6 +997,8 @@ class Handler(BaseHTTPRequestHandler):
                     "mode": "primary",
                     "capture_mode": primary.capture_mode,
                     "cameras": len(cameras),
+                    "caps": caps_payload(),
+                    "still_size": list(still_state["size"]) if still_state["size"] else "full",
                     "session": primary.current_session,
                     "session_kind": skind,
                     "video": video,
@@ -806,6 +1010,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/capture":
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             batch = qs.get("batch", [None])[0]
+            size = normalise_still_size(qs.get("size", [None])[0])
+            still_state["size"] = size
             threading.Thread(target=secondary_capture, args=(batch,), daemon=True).start()
             self._send_json(200, {"ok": True})
         elif path == "/video/start":
@@ -822,7 +1028,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/status":
             with video_lock:
                 recording = video_state["recording"]
-            self._send_json(200, {"pi_id": PI_ID, "cameras": len(cameras), "recording": recording})
+            self._send_json(200, {
+                "pi_id": PI_ID,
+                "cameras": len(cameras),
+                "caps": caps_payload(),
+                "still_size": list(still_state["size"]) if still_state["size"] else "full",
+                "recording": recording,
+            })
         elif path == "/sync":
             self._send_json(200, sync_push())
         else:
@@ -913,6 +1125,16 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/captures/delete":
                 name = qs.get("batch", [""])[0]
                 self._send_json(200, primary.delete_ungrouped(name))
+            elif parsed.path == "/captures/delete-all":
+                kind = qs.get("kind", ["image"])[0]
+                if kind not in ("image", "video"):
+                    kind = "image"
+                self._send_json(200, primary.delete_ungrouped_all(kind))
+            elif parsed.path == "/still-size":
+                size = normalise_still_size(qs.get("size", [None])[0])
+                still_state["size"] = size
+                self._send_json(200, {"ok": True,
+                                      "still_size": list(size) if size else "full"})
             else:
                 self._send_json(404, {"error": "not found"})
         else:
