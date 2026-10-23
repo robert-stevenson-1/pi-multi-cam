@@ -338,15 +338,15 @@ def video_output_factories(path_base):
     factories = []
     try:
         from picamera2.outputs import FfmpegOutput
-        factories.append((path_base + ".mp4", lambda: FfmpegOutput(path_base + ".mp4")))
+        factories.append(("ffmpeg", path_base + ".mp4", lambda: FfmpegOutput(path_base + ".mp4")))
     except Exception as e:
         print(f"FfmpegOutput unavailable: {e}")
     try:
         from picamera2.outputs import PyavOutput
-        factories.append((path_base + ".mp4", lambda: PyavOutput(path_base + ".mp4")))
+        factories.append(("pyav", path_base + ".mp4", lambda: PyavOutput(path_base + ".mp4")))
     except Exception as e:
         print(f"PyavOutput unavailable: {e}")
-    factories.append((path_base + ".h264", lambda: FileOutput(path_base + ".h264")))
+    factories.append(("file", path_base + ".h264", lambda: FileOutput(path_base + ".h264")))
     return factories
 
 
@@ -367,15 +367,32 @@ def start_cam_recording(cam, path_base, st):
     cam.start()
     last_error = None
     for enc_factory in video_encoder_factories():
-        for path, out_factory in video_output_factories(path_base):
+        try:
+            enc = enc_factory(bitrate)
+        except Exception as e:
+            print(f"WARNING: encoder construction failed: {e}")
+            continue
+        enc_name = enc.__class__.__name__
+        prio = ("pyav", "ffmpeg", "file") if "Libav" in enc_name else ("ffmpeg", "pyav", "file")
+        for kind, path, out_factory in sorted(video_output_factories(path_base),
+                                              key=lambda o: prio.index(o[0])):
             try:
-                enc = enc_factory(bitrate)
                 cam.start_encoder(enc, out_factory())
-                print(f"Recording {path} ({enc.__class__.__name__})")
-                return cam, enc, path
             except Exception as e:
                 last_error = e
-                print(f"WARNING: encoder/output attempt failed: {e}")
+                print(f"WARNING: {enc_name} + {kind} start failed: {e}")
+                continue
+            time.sleep(0.5)
+            if not (os.path.isfile(path) and os.path.getsize(path) > 0):
+                try:
+                    cam.stop_encoder()
+                except Exception:
+                    pass
+                last_error = "encoder output produced no data"
+                print(f"WARNING: {enc_name} + {kind} produced no data; trying next")
+                continue
+            print(f"Recording {path} ({enc_name} + {kind})")
+            return cam, enc, path
     raise RuntimeError(f"no working video encoder/output combination: {last_error}")
 
 
