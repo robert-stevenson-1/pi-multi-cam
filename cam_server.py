@@ -1129,6 +1129,7 @@ class Handler(BaseHTTPRequestHandler):
                     response["batch"] = body["batch"]
                 self._send_json(200, response)
             elif parsed.path == "/video/start":
+                print(f"video/start POST from {self.client_address[0]}")
                 st = video_settings_from_qs(qs)
                 body = primary.video_start(remote=True, st=st)
                 self._send_json(200, body)
