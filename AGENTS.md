@@ -22,7 +22,7 @@ getent hosts pi-cam-0.local
 ssh -o BatchMode=yes -o ConnectTimeout=3 pi@pi-cam-0.local true
 ```
 
-If either fails, stay local and say so — no retry loops, no interactive password prompts. `~/.ssh/config` maps `pi-cam-*.local` (and bare `pi-cam-*`) to user `pi` with the passphrase-less `~/.ssh/id_ed25519_pips`; its public key must be in `/home/pi/.ssh/authorized_keys` on each Pi.
+If either fails, stay local and say so — no retry loops, no interactive password prompts. Always address the Pis by their full `.local` name (`pi-cam-2` does not reliably resolve via mDNS); `~/.ssh/config` maps `pi-cam-*.local` to user `pi` with the passphrase-less `~/.ssh/id_ed25519_pips`, whose public key must be in `/home/pi/.ssh/authorized_keys` on each Pi.
 
 - Hosts: `pi-cam-0.local` is the primary (`PI_ID=pi0`), `pi-cam-1.local` … `pi-cam-3.local` the secondaries. Repo is `/home/pi/pi-multi-cam`, logs in `.run/`, systemd units `picam_primary.service` / `picam_secondary.service`.
 - Deploy: commit and push here, then `ssh pi@<host> 'cd /home/pi/pi-multi-cam && git pull --ff-only'`, `ssh pi@<host> 'cd /home/pi/pi-multi-cam && python3 -m py_compile cam_server.py cam_preview.py web_gallery.py pispot.py'`, then `./launch_primary.sh restart` or `./launch_secondary.sh restart`; check with `./launch_*.sh status` and `tail .run/*.log`. Restart secondaries after the primary.
