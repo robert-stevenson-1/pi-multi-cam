@@ -2055,7 +2055,7 @@ function renderDevicePill(el, label, errors, offline = false, fallbackTitle = ''
   const summary = cameraErrorSummary(errors);
   el.replaceChildren(dot, document.createTextNode(label + (summary ? ' · ' + summary : '')));
   el.title = errors.length
-    ? errors.map(e => 'Camera ' + e.camera + ': ' + e.error).join('\n')
+    ? errors.map(e => 'Camera ' + e.camera + ': ' + e.error).join(' | ')
     : fallbackTitle;
 }
 
