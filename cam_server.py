@@ -784,7 +784,6 @@ class Primary:
         batch = self.new_batch("video")
         self.current_video_batch = batch
         res = video_recording_start(batch, st)
-        res = video_recording_start(batch, st)
         if not res.get("ok"):
             with self.lock:
                 try:
