@@ -1160,6 +1160,26 @@ figcaption {
   color: var(--text-muted);
   margin: 0;
 }
+.upload-refresh-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.65rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.upload-refresh-option input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent-primary);
+}
+.upload-refresh-status {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-left: 0.5rem;
+}
 .btn-record {
   padding: 0.7rem 1.4rem;
   font-size: 0.95rem;
@@ -1507,6 +1527,8 @@ def main_html(mode, cards_content, session_settings=None, ungrouped_count=0):
     </div>
     {settings}
     <p class="settings-note">Settings apply to every Pi in the next recording and are saved with the active video session. Each camera records its own file; no live preview is shown.</p>
+    <label class="upload-refresh-option"><input type="checkbox" id="autoRefreshUploads" checked> Auto-refresh while Pi videos upload</label>
+    <span class="upload-refresh-status" id="uploadRefreshStatus" aria-live="polite"></span>
   </div>
   <div class="gallery-subbar">
     {subbar_html("video", ungrouped_count)}
@@ -1551,6 +1573,21 @@ def mobile_bar_html(mode):
 PAGE_JS = """let lightbox = null;
 const PAGE_MODE = '__PAGE_MODE__';
 let videoRecordingActive = false;
+const VIDEO_AUTO_REFRESH_KEY = 'mcAutoRefreshVideoUploads';
+const VIDEO_PENDING_UPLOAD_KEY = 'mcPendingVideoUpload';
+const VIDEO_UPLOAD_REFRESH_MS = 5000;
+const VIDEO_UPLOAD_REFRESH_MAX_MS = 15 * 60 * 1000;
+let autoRefreshVideoUploads = true;
+let videoUploadRefreshTimer = null;
+let videoUploadRefreshInFlight = false;
+let pendingVideoUploadBatch = null;
+let pendingVideoUploadStarted = 0;
+let observedVideoRecording = false;
+let observedVideoBatch = null;
+try {
+  const savedAutoRefresh = localStorage.getItem(VIDEO_AUTO_REFRESH_KEY);
+  if (savedAutoRefresh !== null) autoRefreshVideoUploads = savedAutoRefresh === 'true';
+} catch (e) {}
 
 function modeSync() {
   fetch('/mode?mode=' + PAGE_MODE, {method: 'POST'})
@@ -2083,6 +2120,161 @@ function notifyCameraErrors(devices) {
   cameraAlertKeys = current;
 }
 
+function setVideoUploadStatus(message) {
+  const status = document.getElementById('uploadRefreshStatus');
+  if (status) status.textContent = message;
+}
+
+function expectedVideoFiles(status) {
+  const devices = [];
+  if (status && status.primary) devices.push(status.primary);
+  Object.values((status && status.secondaries) || {}).forEach(device => {
+    if (device.up) devices.push(device);
+  });
+  const expected = new Set();
+  devices.forEach(device => {
+    if (!device.pi_id) return;
+    const indices = Array.isArray(device.available_cameras)
+      ? device.available_cameras
+      : Array.from({length: Number(device.cameras) || 0}, (_, i) => i);
+    const failed = new Set(cameraErrorsOf(device).map(error => String(error.camera)));
+    indices.forEach(index => {
+      if (!failed.has(String(index))) expected.add(device.pi_id + '_cam' + index);
+    });
+  });
+  return expected;
+}
+
+function videoFilesInBatch(batch) {
+  const card = Array.from(document.querySelectorAll('.batch-card'))
+    .find(el => el.getAttribute('data-batch-name') === batch);
+  if (!card) return new Set();
+  return new Set(Array.from(card.querySelectorAll('.thumb-card')).map(el => {
+    const name = el.getAttribute('data-img') || '';
+    const dot = name.lastIndexOf('.');
+    return dot > 0 ? name.slice(0, dot) : name;
+  }));
+}
+
+function clearVideoUploadRefresh(batch, message, toastType) {
+  if (videoUploadRefreshTimer) clearTimeout(videoUploadRefreshTimer);
+  videoUploadRefreshTimer = null;
+  if (batch === pendingVideoUploadBatch) {
+    pendingVideoUploadBatch = null;
+    pendingVideoUploadStarted = 0;
+    try { localStorage.removeItem(VIDEO_PENDING_UPLOAD_KEY); } catch (e) {}
+  }
+  setVideoUploadStatus(message);
+  if (message && toastType) showToast(message, toastType, 6000);
+}
+
+function scheduleVideoUploadRefresh(batch, started) {
+  if (!autoRefreshVideoUploads || pendingVideoUploadBatch !== batch) return;
+  if (videoUploadRefreshTimer) clearTimeout(videoUploadRefreshTimer);
+  videoUploadRefreshTimer = setTimeout(() => pollVideoUploadRefresh(batch, started), VIDEO_UPLOAD_REFRESH_MS);
+}
+
+function pollVideoUploadRefresh(batch, started) {
+  if (!autoRefreshVideoUploads || pendingVideoUploadBatch !== batch) return;
+  if (videoUploadRefreshInFlight) {
+    scheduleVideoUploadRefresh(batch, started);
+    return;
+  }
+  videoUploadRefreshTimer = null;
+  videoUploadRefreshInFlight = true;
+  refreshGallery(false, '/video?partial=1')
+    .then(() => fetch('/server-status'))
+    .then(r => r.json())
+    .then(status => {
+      if (pendingVideoUploadBatch !== batch) return;
+      if (!autoRefreshVideoUploads) {
+        setVideoUploadStatus('Auto-refresh paused.');
+        return;
+      }
+      if (!status.ok) throw new Error(status.error || 'status unavailable');
+      const expected = expectedVideoFiles(status);
+      const present = videoFilesInBatch(batch);
+      const missing = Array.from(expected).filter(name => !present.has(name));
+      if (expected.size && missing.length === 0) {
+        clearVideoUploadRefresh(batch, 'All available camera videos arrived.', 'success');
+        return;
+      }
+      if (Date.now() - started >= VIDEO_UPLOAD_REFRESH_MAX_MS) {
+        clearVideoUploadRefresh(batch, 'Auto-refresh timed out; refresh later to check remaining videos.', 'info');
+        return;
+      }
+      setVideoUploadStatus(missing.length
+        ? 'Waiting for ' + missing.length + ' camera video(s) from other Pis…'
+        : 'Checking camera upload status…');
+      scheduleVideoUploadRefresh(batch, started);
+    })
+    .catch(() => {
+      if (pendingVideoUploadBatch === batch && autoRefreshVideoUploads) {
+        if (Date.now() - started >= VIDEO_UPLOAD_REFRESH_MAX_MS) {
+          clearVideoUploadRefresh(batch, 'Auto-refresh timed out; refresh later to check remaining videos.', 'info');
+        } else {
+          setVideoUploadStatus('Checking for camera uploads…');
+          scheduleVideoUploadRefresh(batch, started);
+        }
+      }
+    })
+    .finally(() => { videoUploadRefreshInFlight = false; });
+}
+
+function beginVideoUploadRefresh(batch) {
+  if (!batch || PAGE_MODE !== 'video') return;
+  if (pendingVideoUploadBatch === batch && pendingVideoUploadStarted) {
+    if (autoRefreshVideoUploads && !videoUploadRefreshTimer && !videoUploadRefreshInFlight) {
+      pollVideoUploadRefresh(batch, pendingVideoUploadStarted);
+    }
+    return;
+  }
+  if (videoUploadRefreshTimer) clearTimeout(videoUploadRefreshTimer);
+  pendingVideoUploadBatch = batch;
+  pendingVideoUploadStarted = Date.now();
+  try {
+    localStorage.setItem(VIDEO_PENDING_UPLOAD_KEY, JSON.stringify({
+      batch: batch, started: pendingVideoUploadStarted
+    }));
+  } catch (e) {}
+  setVideoUploadStatus(autoRefreshVideoUploads
+    ? 'Waiting for secondary video uploads…'
+    : 'Auto-refresh is off.');
+  if (autoRefreshVideoUploads) pollVideoUploadRefresh(batch, pendingVideoUploadStarted);
+  else refreshGallery(false, '/video?partial=1');
+}
+
+function initVideoUploadRefreshToggle() {
+  const toggle = document.getElementById('autoRefreshUploads');
+  if (!toggle) return;
+  toggle.checked = autoRefreshVideoUploads;
+  toggle.addEventListener('change', () => {
+    autoRefreshVideoUploads = toggle.checked;
+    try { localStorage.setItem(VIDEO_AUTO_REFRESH_KEY, String(autoRefreshVideoUploads)); } catch (e) {}
+    if (!autoRefreshVideoUploads) {
+      if (videoUploadRefreshTimer) clearTimeout(videoUploadRefreshTimer);
+      videoUploadRefreshTimer = null;
+      setVideoUploadStatus(pendingVideoUploadBatch ? 'Auto-refresh paused.' : 'Auto-refresh is off.');
+    } else if (pendingVideoUploadBatch) {
+      setVideoUploadStatus('Resuming upload refresh…');
+      pollVideoUploadRefresh(pendingVideoUploadBatch, pendingVideoUploadStarted);
+    } else {
+      setVideoUploadStatus('Auto-refresh is on.');
+    }
+  });
+  try {
+    const pending = JSON.parse(localStorage.getItem(VIDEO_PENDING_UPLOAD_KEY) || 'null');
+    if (pending && pending.batch && Date.now() - pending.started < VIDEO_UPLOAD_REFRESH_MAX_MS) {
+      pendingVideoUploadBatch = pending.batch;
+      pendingVideoUploadStarted = pending.started;
+      if (autoRefreshVideoUploads) pollVideoUploadRefresh(pending.batch, pending.started);
+      else setVideoUploadStatus('Auto-refresh paused.');
+    } else if (pending) {
+      localStorage.removeItem(VIDEO_PENDING_UPLOAD_KEY);
+    }
+  } catch (e) {}
+}
+
 function pollStatus() {
   fetch('/server-status')
     .then(r => r.json())
@@ -2114,6 +2306,16 @@ function pollStatus() {
         showToast('Video recording is active. Photo mode is locked until it stops.', 'info', 6000);
         window.location.replace('/video');
         return;
+      }
+      const currentVideo = p.video || {};
+      if (PAGE_MODE === 'video') {
+        if (currentVideo.recording && currentVideo.batch) {
+          observedVideoBatch = currentVideo.batch;
+        } else if (observedVideoRecording && observedVideoBatch) {
+          beginVideoUploadRefresh(observedVideoBatch);
+          observedVideoBatch = null;
+        }
+        observedVideoRecording = !!currentVideo.recording;
       }
       const primaryErrors = cameraErrorsOf(p);
       renderDevicePill(pPill,
@@ -2192,6 +2394,7 @@ if (stillSel) stillSel.addEventListener('change', () => {
 });
 const vidResSel = document.getElementById('vidRes');
 if (vidResSel) vidResSel.addEventListener('change', rebuildVideoFps);
+initVideoUploadRefreshToggle();
 pollStatus();
 setInterval(pollStatus, 5000);
 initSortControls();
@@ -2332,7 +2535,7 @@ function stopRecord(btn) {
       if (d.ok) {
         showToast('Recording saved (' + Math.round(d.duration || 0) + 's): ' + (d.batch || ''), 'success');
         pollStatus();
-        setTimeout(() => refreshGallery(false, '/video?partial=1'), __REFRESH_MS__);
+        beginVideoUploadRefresh(d.batch);
       } else {
         showToast('Stop failed: ' + (d.error || ''), 'error');
       }
@@ -2487,7 +2690,9 @@ class Handler(SimpleHTTPRequestHandler):
                 resp = urllib.request.urlopen(f"http://{ip}:{port}/status", timeout=2)
                 data = json.loads(resp.read().decode())
                 entry["up"] = True
+                entry["pi_id"] = data.get("pi_id", pi_id)
                 entry["cameras"] = data.get("cameras")
+                entry["available_cameras"] = data.get("available_cameras")
                 entry["recording"] = bool(data.get("recording"))
                 entry["caps"] = data.get("caps")
                 entry["camera_errors"] = data.get("camera_errors", [])

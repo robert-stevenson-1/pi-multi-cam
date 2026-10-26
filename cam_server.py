@@ -1048,6 +1048,7 @@ class Handler(BaseHTTPRequestHandler):
                     "mode": "primary",
                     "capture_mode": primary.capture_mode,
                     "cameras": len(cameras),
+                    "available_cameras": camera_indices,
                     "camera_errors": camera_failures,
                     "caps": caps_payload(),
                     "still_size": list(still_state["size"]) if still_state["size"] else "full",
@@ -1088,6 +1089,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {
                 "pi_id": PI_ID,
                 "cameras": len(cameras),
+                "available_cameras": camera_indices,
                 "camera_errors": camera_failures,
                 "caps": caps_payload(),
                 "still_size": list(still_state["size"]) if still_state["size"] else "full",
