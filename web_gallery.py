@@ -312,6 +312,7 @@ body {
 .live-pill.offline .live-dot { background: #ef4444; }
 .live-pill.active-session { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
 .live-pill.warn { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+.live-pill.warn .live-dot { background: #f59e0b; }
 
 .controls-bar {
   display: flex;
@@ -2037,6 +2038,41 @@ function deleteBatch(btn) {
     .catch(e => showToast('Delete error: ' + e, 'error'));
 }
 
+let cameraAlertKeys = new Set();
+
+function cameraErrorsOf(device) {
+  return Array.isArray(device && device.camera_errors) ? device.camera_errors : [];
+}
+
+function cameraErrorSummary(errors) {
+  return errors.map(e => 'Cam ' + e.camera + ' failed').join(', ');
+}
+
+function renderDevicePill(el, label, errors, offline = false, fallbackTitle = '') {
+  const dot = document.createElement('span');
+  dot.className = 'live-dot';
+  el.className = 'live-pill ' + (offline ? 'offline' : (errors.length ? 'warn' : 'online'));
+  const summary = cameraErrorSummary(errors);
+  el.replaceChildren(dot, document.createTextNode(label + (summary ? ' · ' + summary : '')));
+  el.title = errors.length
+    ? errors.map(e => 'Camera ' + e.camera + ': ' + e.error).join('\n')
+    : fallbackTitle;
+}
+
+function notifyCameraErrors(devices) {
+  const current = new Set();
+  devices.forEach(([piId, errors]) => {
+    errors.forEach(e => {
+      const key = piId + ':' + e.camera + ':' + e.error;
+      current.add(key);
+      if (!cameraAlertKeys.has(key)) {
+        showToast(piId + ': Camera ' + e.camera + ' failed — ' + e.error, 'error', 9000);
+      }
+    });
+  });
+  cameraAlertKeys = current;
+}
+
 function pollStatus() {
   fetch('/server-status')
     .then(r => r.json())
@@ -2055,8 +2091,10 @@ function pollStatus() {
       }
 
       const p = d.primary || {};
-      pPill.className = 'live-pill online';
-      pPill.innerHTML = '<span class="live-dot"></span> Primary (' + (p.cameras || 0) + ' cam' + (p.cameras === 1 ? '' : 's') + ')';
+      const primaryErrors = cameraErrorsOf(p);
+      renderDevicePill(pPill,
+        'Primary (' + (p.cameras || 0) + ' cam' + (p.cameras === 1 ? '' : 's') + ')',
+        primaryErrors);
       videoState = p.video || null;
       applyCaps(p, d.secondaries || {});
       const capsPill = document.getElementById('capsPill');
@@ -2087,17 +2125,26 @@ function pollStatus() {
       }
 
       const secs = Object.entries(d.secondaries || {});
+      const cameraAlerts = [['Primary', primaryErrors]];
       if (secs.length) {
-        secContainer.innerHTML = secs.map(([k, v]) => {
+        secContainer.replaceChildren(...secs.map(([k, v]) => {
+          const pill = document.createElement('span');
           if (v.up) {
-            return '<span class="live-pill online" title="' + v.addr + '"><span class="live-dot"></span> ' + k + ' (' + (v.cameras || 0) + ' cam)' + (v.recording ? ' · REC' : '') + '</span>';
+            const errors = cameraErrorsOf(v);
+            cameraAlerts.push([k, errors]);
+            renderDevicePill(pill,
+              k + ' (' + (v.cameras || 0) + ' cam' + (v.cameras === 1 ? '' : 's') + ')' + (v.recording ? ' · REC' : ''),
+              errors, false, v.addr || '');
           } else {
-            return '<span class="live-pill offline" title="' + v.addr + (v.error ? ' — ' + v.error : '') + '"><span class="live-dot"></span> ' + k + ' Down</span>';
+            renderDevicePill(pill, k + ' Down', [], true,
+              (v.addr || '') + (v.error ? ' — ' + v.error : ''));
           }
-        }).join(' ');
+          return pill;
+        }));
       } else {
         secContainer.innerHTML = '<span class="live-pill" style="opacity:0.7">0 secondaries</span>';
       }
+      notifyCameraErrors(cameraAlerts);
     })
     .catch(() => {
       const pPill = document.getElementById('primaryPill');
@@ -2398,6 +2445,7 @@ class Handler(SimpleHTTPRequestHandler):
                 entry["cameras"] = data.get("cameras")
                 entry["recording"] = bool(data.get("recording"))
                 entry["caps"] = data.get("caps")
+                entry["camera_errors"] = data.get("camera_errors", [])
             except Exception as e:
                 entry["error"] = str(e)
             result["secondaries"][pi_id] = entry

@@ -96,6 +96,8 @@ def _read_sensor_caps(cam):
 
 
 cameras = []
+camera_indices = []
+camera_errors = {}
 per_cam_caps = []
 for i in range(camera_count):
     try:
@@ -109,9 +111,11 @@ for i in range(camera_count):
             cam.set_controls({"AfMode": controls.AfModeEnum.Auto})
         cam.start()
         cameras.append(cam)
+        camera_indices.append(i)
         per_cam_caps.append(caps)
         print(f"Camera {i} connected. Resolution: {cam.stream_configuration()['size']}")
     except Exception as e:
+        camera_errors[i] = str(e)
         print(f"Camera {i} not connected: {e}")
 
 if not cameras:
@@ -418,20 +422,25 @@ def video_recording_start(batch_dir, st, auto_stop=None):
             if video_state["recording"]:
                 return {"ok": False, "error": "already recording"}
             recs = []
-            try:
-                for idx, cam in enumerate(cameras):
+            failed = {}
+            for slot, cam in enumerate(cameras):
+                idx = camera_indices[slot]
+                try:
                     recs.append(start_cam_recording(
                         cam, os.path.join(batch_dir, f"{PI_ID}_cam{idx}"), st))
-            except Exception as e:
-                for cam, enc, path in recs:
-                    try:
-                        cam.stop_encoder()
-                    except Exception:
-                        pass
-                for cam, enc, path in recs:
+                    camera_errors.pop(idx, None)
+                except Exception as e:
+                    failed[idx] = str(e)
+                    camera_errors[idx] = str(e)
                     restore_still_config(cam)
-                print(f"{PI_ID}: video start failed: {e}")
-                return {"ok": False, "error": str(e)}
+                    print(f"{PI_ID}: skipping Camera {idx} for video: {e}")
+            if not recs:
+                error = "no cameras could start video"
+                if failed:
+                    error += ": " + "; ".join(
+                        f"Camera {idx}: {reason}" for idx, reason in sorted(failed.items()))
+                print(f"{PI_ID}: video start failed: {error}")
+                return {"ok": False, "error": error, "camera_errors": failed}
             video_state.update({
                 "recording": True,
                 "batch": os.path.basename(batch_dir),
@@ -446,7 +455,8 @@ def video_recording_start(batch_dir, st, auto_stop=None):
                 video_state["timer"] = timer
             print(f"{PI_ID}: recording {st['res']}p {st['fps']}fps {st['quality']} "
                   f"to {video_state['batch']} ({len(recs)} camera(s))")
-            return {"ok": True, "batch": video_state["batch"], "settings": st, "cameras": len(recs)}
+            return {"ok": True, "batch": video_state["batch"], "settings": st,
+                    "cameras": len(recs), "camera_errors": failed}
 
 
 def video_recording_stop():
@@ -1029,11 +1039,16 @@ class Handler(BaseHTTPRequestHandler):
                         "started": video_state["started"],
                         "settings": video_state["settings"],
                     }
+                    camera_failures = [
+                        {"camera": idx, "error": error}
+                        for idx, error in sorted(camera_errors.items())
+                    ]
                 self._send_json(200, {
                     "pi_id": PI_ID,
                     "mode": "primary",
                     "capture_mode": primary.capture_mode,
                     "cameras": len(cameras),
+                    "camera_errors": camera_failures,
                     "caps": caps_payload(),
                     "still_size": list(still_state["size"]) if still_state["size"] else "full",
                     "session": primary.current_session,
@@ -1066,9 +1081,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/status":
             with video_lock:
                 recording = video_state["recording"]
+                camera_failures = [
+                    {"camera": idx, "error": error}
+                    for idx, error in sorted(camera_errors.items())
+                ]
             self._send_json(200, {
                 "pi_id": PI_ID,
                 "cameras": len(cameras),
+                "camera_errors": camera_failures,
                 "caps": caps_payload(),
                 "still_size": list(still_state["size"]) if still_state["size"] else "full",
                 "recording": recording,
