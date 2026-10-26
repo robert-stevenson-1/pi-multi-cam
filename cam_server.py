@@ -410,7 +410,7 @@ def restore_still_config(cam):
         print(f"WARNING: camera restore to stills failed: {e}")
 
 
-def video_recording_start(batch_dir, st):
+def video_recording_start(batch_dir, st, auto_stop=None):
     st = normalise_video_settings(st)
     os.makedirs(batch_dir, exist_ok=True)
     with capture_lock:
@@ -440,7 +440,7 @@ def video_recording_start(batch_dir, st):
                 "settings": st,
             })
             if st["duration"] > 0:
-                timer = threading.Timer(st["duration"], video_recording_stop)
+                timer = threading.Timer(st["duration"], auto_stop or video_recording_stop)
                 timer.daemon = True
                 timer.start()
                 video_state["timer"] = timer
@@ -783,7 +783,8 @@ class Primary:
                 return {"ok": False, "error": "already recording"}
         batch = self.new_batch("video")
         self.current_video_batch = batch
-        res = video_recording_start(batch, st)
+        res = video_recording_start(
+            batch, st, auto_stop=lambda: primary.video_stop(remote=True))
         if not res.get("ok"):
             with self.lock:
                 try:
@@ -933,7 +934,8 @@ def upload_capture_file(local_dir, fname):
 def secondary_video_start(batch, st):
     def work():
         print(f"{PI_ID}: work thread start batch={batch} st={st}")
-        res = video_recording_start(os.path.join(CAPTURES_DIR, batch), st)
+        res = video_recording_start(
+            os.path.join(CAPTURES_DIR, batch), st, auto_stop=secondary_video_stop)
         if not res.get("ok"):
             print(f"{PI_ID}: video start failed: {res.get('error')}")
     threading.Thread(target=work, daemon=True).start()
@@ -943,7 +945,8 @@ def secondary_video_stop():
     def work():
         res = video_recording_stop()
         if not res.get("ok"):
-            print(f"{PI_ID}: video stop failed: {res.get('error')}")
+            if res.get("error") != "not recording":
+                print(f"{PI_ID}: video stop failed: {res.get('error')}")
             return
         batch = res.get("batch")
         local_dir = os.path.join(CAPTURES_DIR, batch)
