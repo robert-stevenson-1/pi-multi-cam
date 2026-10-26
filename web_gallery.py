@@ -107,24 +107,26 @@ def gallery_cards_html(sections):
     for title, cardlist, is_session, created in sections:
         total_photos = sum(len(entries) for _, entries in cardlist)
         total_batches = len(cardlist)
-        safe_title = urllib.parse.quote(title) if title else "ungrouped"
+        safe_title = urllib.parse.quote(title, safe="") if title else "ungrouped"
         session_key = f"sess_{safe_title}"
+        session_batch_attr = (
+            f' data-session-name="{urllib.parse.quote(title, safe="")}"'
+            if is_session and title else ""
+        )
 
         batch_cards = []
         for name, entries in cardlist:
             formatted_time, hsh = format_batch_display(name)
             hsh_badge = f'<span class="hash-tag">{hsh}</span>' if hsh else ""
-            del_batch = ""
-            if not is_session:
-                del_batch = (
-                    f'<span class="del-wrap">'
-                    f'<button class="btn-zip btn-del" onclick="showDelConfirm(this)">Delete</button>'
-                    f'<span class="del-confirm" hidden>'
-                    f'<button class="btn-zip btn-del-files" onclick="deleteBatch(this)">Delete batch</button>'
-                    f'<button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>'
-                    f'</span>'
-                    f'</span>'
-                )
+            del_batch = (
+                f'<span class="del-wrap">'
+                f'<button class="btn-zip btn-del" onclick="showDelConfirm(this)">Delete</button>'
+                f'<span class="del-confirm" hidden>'
+                f'<button class="btn-zip btn-del-files" onclick="deleteBatch(this)">Delete batch</button>'
+                f'<button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>'
+                f'</span>'
+                f'</span>'
+            )
             thumbs = "".join(
                 f'<figure class="thumb-card" data-img="{img}">'
                 f'<div class="thumb-media">'
@@ -142,7 +144,7 @@ def gallery_cards_html(sections):
             )
 
             batch_cards.append(
-                f'<div class="batch-card" data-batch-name="{name}">'
+                f'<div class="batch-card" data-batch-name="{name}"{session_batch_attr}>'
                 f'<div class="batch-header">'
                 f'<div class="batch-title-group">'
                 f'<span class="batch-time">{formatted_time}</span>{hsh_badge}'
@@ -1301,23 +1303,25 @@ def video_cards_html(sections):
     for title, cardlist, is_session, created in sections:
         total_videos = sum(len(entries) for _, entries in cardlist)
         total_batches = len(cardlist)
-        safe_title = urllib.parse.quote(title) if title else "ungrouped"
+        safe_title = urllib.parse.quote(title, safe="") if title else "ungrouped"
         session_key = f"sess_{safe_title}"
+        session_batch_attr = (
+            f' data-session-name="{urllib.parse.quote(title, safe="")}"'
+            if is_session and title else ""
+        )
         batch_cards = []
         for name, entries in cardlist:
             formatted_time, hsh = format_batch_display(name)
             hsh_badge = f'<span class="hash-tag">{hsh}</span>' if hsh else ""
-            del_batch = ""
-            if not is_session:
-                del_batch = (
-                    f'<span class="del-wrap">'
-                    f'<button class="btn-zip btn-del" onclick="showDelConfirm(this)">Delete</button>'
-                    f'<span class="del-confirm" hidden>'
-                    f'<button class="btn-zip btn-del-files" onclick="deleteBatch(this)">Delete batch</button>'
-                    f'<button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>'
-                    f'</span>'
-                    f'</span>'
-                )
+            del_batch = (
+                f'<span class="del-wrap">'
+                f'<button class="btn-zip btn-del" onclick="showDelConfirm(this)">Delete</button>'
+                f'<span class="del-confirm" hidden>'
+                f'<button class="btn-zip btn-del-files" onclick="deleteBatch(this)">Delete batch</button>'
+                f'<button class="btn-zip" onclick="hideDelConfirm(this)">&#10005;</button>'
+                f'</span>'
+                f'</span>'
+            )
             figures = "".join(
                 f'<figure class="thumb-card" data-img="{img}">'
                 f'<div class="thumb-media vid-media">'
@@ -1334,7 +1338,7 @@ def video_cards_html(sections):
                 for img, size in entries
             )
             batch_cards.append(
-                f'<div class="batch-card" data-batch-name="{name}">'
+                f'<div class="batch-card" data-batch-name="{name}"{session_batch_attr}>'
                 f'<div class="batch-header">'
                 f'<div class="batch-title-group">'
                 f'<span class="batch-time">{formatted_time}</span>{hsh_badge}'
@@ -2072,7 +2076,11 @@ function deleteSession(btn, files) {
 function deleteBatch(btn) {
   const card = btn.closest('.batch-card');
   const name = card.getAttribute('data-batch-name');
-  fetch('/captures/delete?batch=' + encodeURIComponent(name), {method: 'POST'})
+  const sessionName = card.getAttribute('data-session-name');
+  const url = sessionName
+    ? '/session/batch/delete?session=' + sessionName + '&batch=' + encodeURIComponent(name)
+    : '/captures/delete?batch=' + encodeURIComponent(name);
+  fetch(url, {method: 'POST'})
     .then(r => r.json())
     .then(d => {
       if (!d.ok) {
@@ -2650,7 +2658,7 @@ class Handler(SimpleHTTPRequestHandler):
         elif path == "/purge-secondaries":
             body = self._proxy("/purge-secondaries", timeout=60)
             self._send_json(200, {"ok": body.get("ok", False), "secondaries": body.get("secondaries", {})})
-        elif path in ("/session/start", "/session/stop", "/session/delete", "/captures/delete", "/captures/delete-all", "/still-size"):
+        elif path in ("/session/start", "/session/stop", "/session/delete", "/session/batch/delete", "/captures/delete", "/captures/delete-all", "/still-size"):
             body = self._proxy(path + (f"?{qs}" if qs else ""), timeout=10)
             self._send_json(200, body)
         elif path == "/video/start":

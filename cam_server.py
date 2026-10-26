@@ -648,6 +648,38 @@ class Primary:
                 self.current_batch = None
             return {"ok": True, "removed_batch": name}
 
+    def delete_session_batch(self, session_name, batch_name):
+        session_name = session_name.strip()
+        batch_name = batch_name.strip()
+        if not session_name or not batch_name or not all(
+            c.isalnum() or c == "_" for c in batch_name
+        ):
+            return {"ok": False, "error": "invalid session or batch name"}
+        with self.lock:
+            session = next((s for s in self.sessions if s.get("name") == session_name), None)
+            if session is None:
+                return {"ok": False, "error": "unknown session"}
+            batches = session.get("batches", [])
+            if batch_name not in batches:
+                return {"ok": False, "error": "batch does not belong to this session"}
+            with video_lock:
+                recording_batch = video_state["batch"] if video_state["recording"] else None
+            starting_batch = os.path.basename(self.current_video_batch) \
+                if self.current_video_batch else None
+            if batch_name in (recording_batch, starting_batch):
+                return {"ok": False, "error": "batch is being recorded; stop recording first"}
+            path = os.path.join(CAPTURES_DIR, batch_name)
+            if not os.path.isdir(path):
+                return {"ok": False, "error": "unknown batch folder"}
+            shutil.rmtree(path, ignore_errors=True)
+            batches.remove(batch_name)
+            self._save_sessions()
+            if self.current_batch and os.path.basename(self.current_batch) == batch_name:
+                self.current_batch = None
+            if self.current_video_batch and os.path.basename(self.current_video_batch) == batch_name:
+                self.current_video_batch = None
+            return {"ok": True, "removed_batch": batch_name, "session": session_name}
+
     def new_batch(self, kind="image"):
         name = batch_stamp()
         batch = os.path.join(CAPTURES_DIR, name)
@@ -802,6 +834,7 @@ class Primary:
                         os.rmdir(batch)
                 except OSError:
                     pass
+                self.current_video_batch = None
             return res
         self._attach_video_settings(os.path.basename(batch), st)
         if remote:
@@ -810,6 +843,11 @@ class Primary:
 
     def video_stop(self, remote=False):
         res = video_recording_stop()
+        if res.get("ok"):
+            with self.lock:
+                if self.current_video_batch and \
+                    os.path.basename(self.current_video_batch) == res.get("batch"):
+                    self.current_video_batch = None
         if res.get("ok") and remote:
             self.fire_secondaries_video_stop()
         return res
@@ -1199,6 +1237,10 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/captures/delete":
                 name = qs.get("batch", [""])[0]
                 self._send_json(200, primary.delete_ungrouped(name))
+            elif parsed.path == "/session/batch/delete":
+                session_name = qs.get("session", [""])[0]
+                batch_name = qs.get("batch", [""])[0]
+                self._send_json(200, primary.delete_session_batch(session_name, batch_name))
             elif parsed.path == "/captures/delete-all":
                 kind = qs.get("kind", ["image"])[0]
                 if kind not in ("image", "video"):
