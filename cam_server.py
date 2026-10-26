@@ -166,8 +166,14 @@ CAP_FPS_STEPS = (15, 30, 60, 120)
 def _intersect_caps(a, b):
     if not a or not b:
         return a or b
-    sizes = {(e["size"][0], e["size"][1]) for e in a} & {(e["size"][0], e["size"][1]) for e in b}
-    return [e for e in a if (e["size"][0], e["size"][1]) in sizes]
+    by_size = {(e["size"][0], e["size"][1]): e for e in b}
+    out = []
+    for entry in a:
+        size = (entry["size"][0], entry["size"][1])
+        other = by_size.get(size)
+        if other:
+            out.append({"size": list(size), "fps": min(entry["fps"], other["fps"])})
+    return out
 
 
 SENSOR_CAPS = []
@@ -206,9 +212,31 @@ def stream_caps():
     return out
 
 
+def high_resolution_caps():
+    capw, caph = VID_MAX_STREAM
+    sizes = {
+        tuple(entry["size"])
+        for entry in SENSOR_CAPS
+        if entry["size"][0] > capw or entry["size"][1] > caph
+    }
+    sizes.update(
+        size for size in CAP_STREAM_LADDER
+        if (size[0] > capw or size[1] > caph) and max_fps_for_size(*size) >= 10
+    )
+    return [
+        {"size": [w, h], "fps": round(max_fps_for_size(w, h), 2)}
+        for w, h in sorted(sizes, key=lambda size: size[0] * size[1])
+        if max_fps_for_size(w, h) >= 10
+    ]
+
+
 def caps_payload():
     full = full_sensor_size()
-    payload = {"sizes": stream_caps(), "full": list(full) if full else None}
+    payload = {
+        "sizes": stream_caps(),
+        "high_res_sizes": high_resolution_caps(),
+        "full": list(full) if full else None,
+    }
     if not SENSOR_CAPS:
         payload["error"] = "sensor modes unavailable"
     return payload
@@ -221,7 +249,7 @@ def parse_size_token(tok):
     return (int(m.group(1)), int(m.group(2)))
 
 
-def resolve_stream_size(res):
+def resolve_stream_size(res, highres=False):
     token = str(res or "")
     size = parse_size_token(token)
     if size is None and token in VID_SIZES:
@@ -231,8 +259,17 @@ def resolve_stream_size(res):
     if size is None:
         size = VID_SIZES["1080"]
     entries = stream_caps()
+    if highres:
+        entries += high_resolution_caps()
     if not entries:
-        return size
+        capw, caph = VID_MAX_STREAM
+        fallback = [
+            preset for preset in VID_SIZES.values()
+            if preset[0] <= capw and preset[1] <= caph
+        ]
+        if not fallback:
+            fallback = [VID_MAX_STREAM]
+        return size if size in fallback else tuple(fallback[0])
     for e in entries:
         if tuple(e["size"]) == size:
             return size
@@ -240,10 +277,12 @@ def resolve_stream_size(res):
 
 
 def normalise_video_settings(st):
-    size = resolve_stream_size(st.get("res"))
-    entries = stream_caps()
+    highres = str(st.get("highres", "")).strip().lower() in ("1", "true", "yes", "on")
+    size = resolve_stream_size(st.get("res"), highres=highres)
+    entries = stream_caps() + (high_resolution_caps() if highres else [])
+    is_highres_size = highres and any(tuple(e["size"]) == size for e in high_resolution_caps())
     if entries:
-        steps = fps_steps_for_size(size[0], size[1])
+        steps = fps_steps_for_size(size[0], size[1], highres=is_highres_size)
     else:
         steps = [15, 30]
     try:
@@ -258,12 +297,19 @@ def normalise_video_settings(st):
         duration = float(st.get("duration") or 0)
     except (TypeError, ValueError):
         duration = 0.0
-    return {"res": f"{size[0]}x{size[1]}", "fps": fps, "quality": quality, "duration": max(0.0, duration)}
+    return {
+        "res": f"{size[0]}x{size[1]}",
+        "fps": fps,
+        "quality": quality,
+        "duration": max(0.0, duration),
+        "highres": highres,
+    }
 
 
-def fps_steps_for_size(w, h):
+def fps_steps_for_size(w, h, highres=False):
     cap = max_fps_for_size(w, h)
-    steps = [f for f in CAP_FPS_STEPS if f <= cap]
+    available_steps = (10, 14) + CAP_FPS_STEPS if highres else CAP_FPS_STEPS
+    steps = [f for f in available_steps if f <= cap]
     return steps or [5]
 
 
@@ -319,6 +365,7 @@ def video_settings_from_qs(qs):
         "fps": qs.get("fps", [None])[0],
         "quality": qs.get("quality", [None])[0],
         "duration": qs.get("dur", [None])[0],
+        "highres": qs.get("highres", [None])[0],
     })
 
 
@@ -767,6 +814,7 @@ class Primary:
         qs = urllib.parse.urlencode({
             "batch": batch, "res": st["res"], "fps": st["fps"],
             "quality": st["quality"], "dur": st["duration"],
+            "highres": 1 if st.get("highres") else 0,
         })
         print(f"{PI_ID}: video start fanout to {len(self.secondaries)} secondaries (batch {batch})")
         threads = []

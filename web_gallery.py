@@ -1162,6 +1162,26 @@ figcaption {
   color: var(--text-muted);
   margin: 0;
 }
+.highres-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-main);
+  cursor: pointer;
+}
+.highres-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent-primary);
+}
+.highres-warning {
+  margin-top: 0.35rem;
+  color: #92400e;
+  font-size: 0.76rem;
+}
 .upload-refresh-option {
   display: inline-flex;
   align-items: center;
@@ -1258,20 +1278,32 @@ def mode_tabs(current):
 def video_settings_fields(ss):
     ss = ss or {}
     res = str(ss.get("res", "1080"))
+    res = {"1080": "1920x1080", "720": "1280x720"}.get(res, res)
     fps = str(ss.get("fps", "30"))
     qual = str(ss.get("quality", "medium"))
     dur = str(ss.get("duration", 0))
     prefill = "1" if ss else "0"
+    res_options = [
+        ("1920x1080", "1080p · 1920 × 1080"),
+        ("1280x720", "720p · 1280 × 720"),
+    ]
+    if res not in {value for value, _ in res_options}:
+        size_label = res.replace("x", " × ")
+        res_options.append((res, size_label))
+    rendered_res_options = "".join(
+        f'<option value="{value}" {"selected" if res == value else ""}>{label}</option>'
+        for value, label in res_options
+    )
+    extra_fps = "" if fps in ("15", "30") else f'<option value="{fps}" selected>{fps} fps</option>'
+    highres = bool(ss.get("highres", False))
     return f"""<div class="settings-grid" id="videoSettings" data-prefilled="{prefill}">
         <div class="set-field"><label for="vidRes">Resolution</label>
-          <select id="vidRes">
-            <option value="1080" {'selected' if res == '1080' else ''}>1080p</option>
-            <option value="720" {'selected' if res == '720' else ''}>720p</option>
-          </select></div>
+          <select id="vidRes">{rendered_res_options}</select></div>
         <div class="set-field"><label for="vidFps">Frame rate</label>
           <select id="vidFps">
             <option value="30" {'selected' if fps == '30' else ''}>30 fps</option>
             <option value="15" {'selected' if fps == '15' else ''}>15 fps</option>
+            {extra_fps}
           </select></div>
         <div class="set-field"><label for="vidQual">Quality</label>
           <select id="vidQual">
@@ -1282,7 +1314,9 @@ def video_settings_fields(ss):
         <div class="set-field"><label for="vidDur">Max duration (s)</label>
           <input id="vidDur" type="number" min="0" step="1" value="{dur}">
         </div>
-      </div>"""
+      </div>
+      <label class="highres-toggle"><input id="vidHighRes" type="checkbox"{' checked' if highres else ''}> Enable higher-resolution video modes</label>
+      <p class="highres-warning">Warning: these opt-in modes can overload the Pi 5’s CPU, memory, and cooling. Software encoding may drop frames, fail, or throttle; files are much larger. Module 3’s 4608 × 2592 mode is limited to about 14 fps.</p>"""
 
 
 def video_cards_html(sections):
@@ -1605,26 +1639,36 @@ function modeSync() {
 function updateRecordUI() {}
 
 let uiSizes = null;
+let uiHighResSizes = [];
 let uiFull = null;
 let capsSig = "";
 
 function intersectSizes(a, b) {
-  const set = new Set(b.map(e => e.size[0] + 'x' + e.size[1]));
-  return a.filter(e => set.has(e.size[0] + 'x' + e.size[1]));
+  const bySize = new Map(b.map(e => [e.size[0] + 'x' + e.size[1], e]));
+  return a.flatMap(e => {
+    const other = bySize.get(e.size[0] + 'x' + e.size[1]);
+    return other ? [{size: e.size, fps: Math.min(e.fps, other.fps)}] : [];
+  });
 }
 
 function applyCaps(p, secs) {
   const caps = (p || {}).caps;
   if (!caps || !Array.isArray(caps.sizes) || !caps.sizes.length) return;
   let sizes = caps.sizes;
+  let highResSizes = Array.isArray(caps.high_res_sizes) ? caps.high_res_sizes : [];
   Object.values(secs || {}).forEach(v => {
     const s = v && v.up && v.caps && v.caps.sizes;
     if (Array.isArray(s) && s.length) sizes = intersectSizes(sizes, s);
+    if (v && v.up) {
+      const high = v.caps && v.caps.high_res_sizes;
+      highResSizes = Array.isArray(high) ? intersectSizes(highResSizes, high) : [];
+    }
   });
   if (!sizes.length) return;
   uiSizes = sizes;
+  uiHighResSizes = highResSizes;
   uiFull = caps.full || null;
-  const sig = JSON.stringify(sizes) + '|' + JSON.stringify(uiFull);
+  const sig = JSON.stringify(sizes) + '|' + JSON.stringify(highResSizes) + '|' + JSON.stringify(uiFull);
   if (sig === capsSig) return;
   capsSig = sig;
   rebuildVideoSizes();
@@ -1634,10 +1678,13 @@ function applyCaps(p, secs) {
 function rebuildVideoSizes() {
   const resSel = document.getElementById('vidRes');
   if (!resSel) return;
+  const highResToggle = document.getElementById('vidHighRes');
+  const sizes = (uiSizes || []).concat(highResToggle && highResToggle.checked ? uiHighResSizes : []);
+  if (!sizes.length) return;
   const legacy = {'1080': '1920x1080', '720': '1280x720'};
   let cur = resSel.value;
   if (legacy[cur]) cur = legacy[cur];
-  resSel.innerHTML = uiSizes.map(e =>
+  resSel.innerHTML = sizes.map(e =>
     '<option value="' + e.size[0] + 'x' + e.size[1] + '">' + e.size[0] + ' × ' + e.size[1] + '</option>'
   ).join('');
   const has = Array.from(resSel.options).some(o => o.value === cur);
@@ -1651,8 +1698,14 @@ function rebuildVideoFps() {
   if (!fpsSel || !uiSizes) return;
   const parts = (resSel.value || '').split('x');
   const e = uiSizes.find(s => String(s.size[0]) === parts[0] && String(s.size[1]) === parts[1]);
-  const cap = e ? e.fps : 0;
-  const steps = [15, 30, 60, 120].filter(f => f <= cap);
+  const highResToggle = document.getElementById('vidHighRes');
+  const highResEntry = highResToggle && highResToggle.checked
+    ? uiHighResSizes.find(s => String(s.size[0]) === parts[0] && String(s.size[1]) === parts[1])
+    : null;
+  const selected = highResEntry || e;
+  const cap = selected ? selected.fps : 0;
+  const availableSteps = highResEntry ? [10, 14, 15, 30, 60, 120] : [15, 30, 60, 120];
+  const steps = availableSteps.filter(f => f <= cap);
   if (!steps.length) return;
   const cur = parseInt(fpsSel.value, 10) || 30;
   fpsSel.innerHTML = steps.map(f => '<option value="' + f + '">' + f + ' fps</option>').join('');
@@ -2490,9 +2543,10 @@ function videoSettingsQuery() {
   const res = document.getElementById('vidRes').value;
   const fps = document.getElementById('vidFps').value;
   const qual = document.getElementById('vidQual').value;
+  const highres = document.getElementById('vidHighRes').checked ? '1' : '0';
   const durRaw = parseFloat(document.getElementById('vidDur').value);
   const dur = (isNaN(durRaw) || durRaw < 0) ? 0 : durRaw;
-  return 'res=' + res + '&fps=' + fps + '&quality=' + qual + '&dur=' + dur;
+  return 'res=' + res + '&fps=' + fps + '&quality=' + qual + '&dur=' + dur + '&highres=' + highres;
 }
 
 function saveVideoSettings() {
@@ -2501,7 +2555,8 @@ function saveVideoSettings() {
       res: document.getElementById('vidRes').value,
       fps: document.getElementById('vidFps').value,
       quality: document.getElementById('vidQual').value,
-      duration: document.getElementById('vidDur').value
+      duration: document.getElementById('vidDur').value,
+      highres: document.getElementById('vidHighRes').checked
     }));
   } catch (e) {}
 }
@@ -2588,16 +2643,24 @@ function updateRecordUI() {
 function initVideoSettings() {
   const grid = document.getElementById('videoSettings');
   if (!grid) return;
-  if (grid.getAttribute('data-prefilled') === '1') return;
+  const prefilled = grid.getAttribute('data-prefilled') === '1';
+  let vs = {};
   try {
-    const vs = JSON.parse(localStorage.getItem('mcVideoSettings') || '{}');
-    if (vs && typeof vs === 'object') {
+    if (!prefilled) vs = JSON.parse(localStorage.getItem('mcVideoSettings') || '{}');
+    if (!prefilled && vs && typeof vs === 'object') {
       if (vs.res) document.getElementById('vidRes').value = vs.res;
       if (vs.fps) document.getElementById('vidFps').value = vs.fps;
       if (vs.quality) document.getElementById('vidQual').value = vs.quality;
       if (typeof vs.duration !== 'undefined') document.getElementById('vidDur').value = vs.duration;
     }
   } catch (e) {}
+  const highresToggle = document.getElementById('vidHighRes');
+  if (!prefilled && typeof vs.highres === 'boolean') highresToggle.checked = vs.highres;
+  if (highresToggle) highresToggle.addEventListener('change', () => {
+    rebuildVideoSizes();
+    rebuildVideoFps();
+    saveVideoSettings();
+  });
 }
 
 initVideoSettings();
