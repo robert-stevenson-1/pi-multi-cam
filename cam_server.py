@@ -1162,6 +1162,14 @@ class Handler(BaseHTTPRequestHandler):
                 if mode not in ("photo", "video"):
                     self._send_json(400, {"error": "invalid mode"})
                     return
+                with video_lock:
+                    recording = video_state["recording"]
+                if recording and mode == "photo":
+                    self._send_json(409, {
+                        "ok": False,
+                        "error": "stop the video recording before switching to photo mode",
+                    })
+                    return
                 with primary.lock:
                     primary.capture_mode = mode
                 self._send_json(200, {"ok": True, "capture_mode": mode})

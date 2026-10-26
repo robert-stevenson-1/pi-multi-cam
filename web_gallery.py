@@ -1091,6 +1091,10 @@ figcaption {
   background: var(--accent-primary);
   color: #ffffff;
 }
+.mode-tab.locked {
+  color: var(--text-light);
+  cursor: not-allowed;
+}
 
 .rec-pill {
   background: #fef2f2;
@@ -1546,9 +1550,15 @@ def mobile_bar_html(mode):
 
 PAGE_JS = """let lightbox = null;
 const PAGE_MODE = '__PAGE_MODE__';
+let videoRecordingActive = false;
 
 function modeSync() {
-  try { fetch('/mode?mode=' + PAGE_MODE, {method: 'POST'}); } catch (e) {}
+  fetch('/mode?mode=' + PAGE_MODE, {method: 'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) showToast(d.error || 'Capture mode change was refused.', 'error');
+    })
+    .catch(e => showToast('Capture mode error: ' + e, 'error'));
 }
 
 function updateRecordUI() {}
@@ -2091,6 +2101,20 @@ function pollStatus() {
       }
 
       const p = d.primary || {};
+      videoRecordingActive = !!(p.video && p.video.recording);
+      const photoTab = document.querySelector('.mode-tab[href="/"]');
+      if (photoTab) {
+        photoTab.classList.toggle('locked', videoRecordingActive);
+        photoTab.setAttribute('aria-disabled', videoRecordingActive ? 'true' : 'false');
+        photoTab.title = videoRecordingActive
+          ? 'Stop the active video recording before switching to Photos'
+          : 'Photo capture mode';
+      }
+      if (videoRecordingActive && PAGE_MODE === 'photo') {
+        showToast('Video recording is active. Photo mode is locked until it stops.', 'info', 6000);
+        window.location.replace('/video');
+        return;
+      }
       const primaryErrors = cameraErrorsOf(p);
       renderDevicePill(pPill,
         'Primary (' + (p.cameras || 0) + ' cam' + (p.cameras === 1 ? '' : 's') + ')',
@@ -2152,6 +2176,15 @@ function pollStatus() {
       pPill.innerHTML = '<span class="live-dot"></span> Connection Error';
     });
 }
+
+document.querySelectorAll('.mode-tab').forEach(tab => {
+  tab.addEventListener('click', event => {
+    if (tab.getAttribute('href') === '/' && videoRecordingActive) {
+      event.preventDefault();
+      showToast('Stop the video recording before switching to Photos.', 'info');
+    }
+  });
+});
 
 const stillSel = document.getElementById('stillRes');
 if (stillSel) stillSel.addEventListener('change', () => {
@@ -2376,6 +2409,18 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path in ("/", ""):
             partial = "partial" in query and query["partial"][0] in ("1", "true")
+            if not partial:
+                try:
+                    resp = urllib.request.urlopen(
+                        f"http://{PRIMARY_HOST}:{PRIMARY_PORT}/status", timeout=2)
+                    primary_status = json.loads(resp.read().decode())
+                    if primary_status.get("video", {}).get("recording"):
+                        self.send_response(303)
+                        self.send_header("Location", "/video")
+                        self.end_headers()
+                        return
+                except Exception:
+                    pass
             self._serve_gallery(partial=partial)
         elif path == "/video":
             partial = "partial" in query and query["partial"][0] in ("1", "true")
