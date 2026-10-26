@@ -726,6 +726,7 @@ class Primary:
             "batch": batch, "res": st["res"], "fps": st["fps"],
             "quality": st["quality"], "dur": st["duration"],
         })
+        print(f"{PI_ID}: video start fanout to {len(self.secondaries)} secondaries (batch {batch})")
         threads = []
         for pi_id, (ip, port) in list(self.secondaries.items()):
             url = f"http://{ip}:{port}/video/start?{qs}"
@@ -749,7 +750,13 @@ class Primary:
 
     def _fanout_get(self, pi_id, url, timeout):
         try:
-            urllib.request.urlopen(url, timeout=timeout)
+            resp = urllib.request.urlopen(url, timeout=timeout)
+            code = getattr(resp, "status", 200)
+            try:
+                body = resp.read().decode()
+            except Exception:
+                body = ""
+            print(f"{PI_ID}: fanout {pi_id} {urllib.parse.urlparse(url).path} -> {code} {body[:120]}")
         except Exception as e:
             print(f"WARNING: secondary {pi_id} video call failed: {e}")
 
@@ -926,6 +933,7 @@ def upload_capture_file(local_dir, fname):
 
 def secondary_video_start(batch, st):
     def work():
+        print(f"{PI_ID}: work thread start batch={batch} st={st}")
         res = video_recording_start(os.path.join(CAPTURES_DIR, batch), st)
         if not res.get("ok"):
             print(f"{PI_ID}: video start failed: {res.get('error')}")
@@ -1044,6 +1052,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/video/start":
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             batch = (qs.get("batch", [None])[0] or "").strip()
+            print(f"{PI_ID}: /video/start received batch={batch} res={qs.get('res')}")
             if not batch or not all(c.isalnum() or c == "_" for c in batch):
                 self._send_json(400, {"error": "invalid batch"})
                 return
@@ -1072,9 +1081,6 @@ class Handler(BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed.query)
         if PRIMARY:
             if parsed.path == "/register":
-                if len(primary.secondaries) >= MAX_SECONDARIES:
-                    self._send_json(429, {"error": "too many secondaries"})
-                    return
                 pi_id = qs.get("pi_id", [""])[0]
                 if not pi_id:
                     self._send_json(400, {"error": "missing pi_id"})
@@ -1082,8 +1088,16 @@ class Handler(BaseHTTPRequestHandler):
                 port = int(qs.get("port", [str(SECONDARY_PORT)])[0])
                 ip = self.client_address[0]
                 with primary.lock:
+                    known = pi_id in primary.secondaries and \
+                        primary.secondaries[pi_id] == (ip, port)
+                    full = len(primary.secondaries) >= MAX_SECONDARIES and not known
+                if full:
+                    self._send_json(429, {"error": "too many secondaries"})
+                    return
+                with primary.lock:
                     primary.secondaries[pi_id] = (ip, port)
-                print(f"Registered secondary {pi_id} at {ip}:{port}")
+                if not known:
+                    print(f"Registered secondary {pi_id} at {ip}:{port}")
                 self._send_json(200, {"ok": True, "secondaries": len(primary.secondaries)})
             elif parsed.path == "/upload":
                 length = int(self.headers.get("Content-Length", 0))
