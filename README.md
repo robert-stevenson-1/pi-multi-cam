@@ -16,14 +16,15 @@ sudo pip3 install gpiod --break-system-packages
 - `python3-opencv` (`cv2`)
 - `numpy` (pulled in by the above)
 - `gpiod` via pip (GPIO button trigger; optional, degrades gracefully) — `python3-gpiod` isn't in Raspbian's repos, and apt's libgpiod would be the old v1 API anyway; the pip package is the self-contained v2 bindings the code targets
+- For MP4 video output, either `ffmpeg` (apt) or PyAV (`python3-av`) is used if present; without both, recordings fall back to raw `.h264` files. Recording works either way.
 
 ## Architecture
 
 A shared **active-low** button is wired to every Pi's `GPIO_TRIGGER_PIN` (pull-up set in software). One press makes all Pis capture simultaneously via hardware — the network is only used *after* capture for secondaries to push frames to the primary.
 
-- **Primary** (`MODE="p"`): capture daemon + HTTP server. Bundles every capture into a timestamped folder.
+- **Primary** (`MODE="p"`): capture daemon + HTTP server. Bundles every capture into a timestamped folder, and can record synchronized video.
 - **Secondary** (`MODE="s"`, up to 3): headless capture daemon. Registers with the primary at startup, stores every capture locally, then uploads it. Unsynced frames (e.g. primary was down) are pushed later via the gallery's **Sync now**.
-- **Gallery** (`web_gallery.py`): browser UI on the primary — PhotoSwipe lightbox, software capture trigger, sync, secondary purge, sessions, downloads, and live primary/secondary health status.
+- **Gallery** (`web_gallery.py`): browser UI on the primary — separate **Photos** (`/`) and **Video** (`/video`) pages, PhotoSwipe lightbox, software capture trigger, synchronized video recording, sync, secondary purge, sessions, downloads, and live primary/secondary health status.
 
 ## Usage
 
@@ -75,19 +76,31 @@ Start the primary before the secondaries. A secondary registers once at startup;
 
 ### Triggers
 
-- **GPIO button**: all Pis fire at once.
-- **Keyboard**: primary accepts `c` (remote capture) and `q` (quit) on stdin.
-- **Web gallery**: "Capture All" button → primary `POST /remote-capture` → fires every registered secondary over HTTP.
+- **GPIO button**: all Pis fire at once for stills; on the primary in video mode it toggles recording.
+- **Keyboard**: primary accepts `c` (remote photo capture), `v` (toggle video recording), `x` (force-stop video) and `q` (quit) on stdin.
+- **Web gallery**: "Capture All" button → primary `POST /remote-capture` → fires every registered secondary over HTTP. On the Video page, **Start Recording** / **Stop Recording** fan out to the secondaries.
+
+### Video recording
+
+The Video page (`/video`) records H.264 video from every camera simultaneously and never streams a preview to the browser. Settings are per recording: resolution, frame rate, quality (low/medium/high → 4/10/20 Mbps) and max duration (`0` = record until stopped). The options are built from each camera's reported sensor modes and intersected across the fleet, so the menu only offers settings every reachable Pi supports; anything sent by a client is clamped again on the server.
+
+- Each Pi records its own `<pi_id>_cam<idx>.mp4` file. Secondaries upload theirs when the recording stops; **Sync now** recovers any that didn't arrive.
+- A camera that fails to configure or encode is skipped while other cameras on that Pi keep recording, and the header shows an amber `Cam N failed` warning with the error in its tooltip.
+- Photo mode is locked while a recording is active; stop the recording to return to Photos.
+- **Enable higher-resolution video modes** unlocks sensor modes above 1080p (e.g. 2304×1296 and 4608×2592 on Camera Module 3). These are opt-in because software encoding is CPU-heavy and can overheat, drop frames, fail, or fill storage quickly. The 4608×2592 mode tops out around 14 fps.
+- **Auto-refresh while Pi videos upload** (on by default, remembered per browser) keeps refreshing the Video page after a recording stops until every reachable Pi's expected video appears, with a 15-minute safety timeout. Turn it off to leave the page static.
 
 ### Gallery features
 
 - **Capture All** — software trigger.
 - **Sync now** — every registered secondary pushes its locally stored captures the primary is missing (recovers frames from when the primary was offline). Secondaries keep local copies after upload (marked `.ok`) until **Purge secondaries** wipes them (two-step confirmation in the UI).
-- **Sessions** — start/stop a named session from the gallery; captures taken while a session is active are grouped under it (manifest in `captures/sessions.json`, folder layout unchanged). GPIO and web captures both join the active session.
-- **Live status** — the header shows whether the primary cam_server is reachable, its camera count, the active session, and the live state of registered secondaries. A red **Primary Down** pill means the gallery cannot reach `PRIMARY_HOST:PRIMARY_PORT`.
+- **Sessions** — start/stop a named session from the gallery; captures taken while a session is active are grouped under it (manifest in `captures/sessions.json`, folder layout unchanged). Photo and video sessions are distinct kinds and cannot be mixed. GPIO and web captures both join the active session.
+- **Delete a batch** — individual batches (grouped or ungrouped) can be deleted with a two-step confirmation; deleting a session batch removes the folder and its manifest entry but keeps the session.
+- **Delete Ungrouped (N)** — wipes every batch not owned by a session, in one confirmed action.
+- **Live status** — the header shows whether the primary cam_server is reachable, its camera count and camera failures, the active session, and the live state of registered secondaries. A red **Primary Down** pill means the gallery cannot reach `PRIMARY_HOST:PRIMARY_PORT`.
 - **In-place gallery updates** — refreshes keep open session sections in place; sessions can be expanded or collapsed individually or all at once.
-- **Lightbox** — click any thumbnail for a fullscreen PhotoSwipe preview (swipe, keyboard, pinch-zoom). Vendored in `static/photoswipe/`, fully offline.
-- **Downloads** — per-image "save", per-batch "download batch", per-session "download" as a ZIP of the full-res frames.
+- **Lightbox** — click any photo thumbnail for a fullscreen PhotoSwipe preview (swipe, keyboard, pinch-zoom). Vendored in `static/photoswipe/`, fully offline. Video files show a card with download links instead of a player.
+- **Downloads** — per-file "save", per-batch "download batch", per-session "download" as a ZIP of the full-res frames/videos.
 
 ### Output
 
@@ -98,10 +111,15 @@ captures/
     pi1_cam0_thumb.jpg     # 480px grid thumbnail
     pi1_cam1.jpg
     pi2_cam0.jpg
+  20260811_144500_7c3d/
+    pi0_cam0.mp4
+    pi0_cam0_thumb.jpg     # frame 0
+    pi1_cam0.mp4
+    pi2_cam0.mp4
   sessions.json            # session manifest, primary only
 ```
 
-Folder name = `YYYYMMDD_HHMMSS` + 4-char hash of the 200ms time bucket, so back-to-back presses within the same second still get distinct folders (identical across Pis for one press). Each file is tagged `<pi_id>_cam<idx>.jpg`. Secondaries mirror this layout locally; `.ok` sidecar markers track which frames have been synced to the primary.
+Folder name = `YYYYMMDD_HHMMSS` + 4-char hash of the 200ms time bucket, so back-to-back presses within the same second still get distinct folders (identical across Pis for one press). Each file is tagged `<pi_id>_cam<idx>.jpg|mp4`. Secondaries mirror this layout locally; `.ok` sidecar markers track which frames have been synced to the primary.
 
 ## Hotspot TUI (`pispot.py`)
 
@@ -145,6 +163,8 @@ nano .env
 - `AF_MODE`: `"continuous"` vs `"interval"` (manual AF trigger every 5s).
 - `GPIO_TRIGGER_PIN`: BCM pin, `-1` disables; active-low, 0.5s software debounce.
 - `CAPTURES_DIR`: output directory.
+- `VID_RES` / `VID_FPS` / `VID_QUALITY` / `VID_DURATION`: fallback defaults for video when no settings arrive from the gallery (per-start settings normally come from the Video page).
+- `VID_MAX_RES`: safety ceiling for automatically offered/accepted stream sizes (`1080` = 1920×1080, or `720`); higher sensor modes remain opt-in through the Video page toggle.
 - `PORT`: web_gallery port.
 - `PREVIEW_PORT`: standalone `cam_preview.py` port, default `9090`.
 - `SIZE`: standalone preview size, default `640x480`.
