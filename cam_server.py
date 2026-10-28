@@ -394,6 +394,14 @@ def video_encoder_factories():
     return factories
 
 
+def discard_dead_output(path):
+    try:
+        if os.path.isfile(path) and os.path.getsize(path) == 0:
+            os.unlink(path)
+    except OSError:
+        pass
+
+
 def video_output_factories(path_base):
     from picamera2.outputs import FileOutput
     factories = []
@@ -441,6 +449,7 @@ def start_cam_recording(cam, path_base, st):
                 cam.start_encoder(enc, out_factory())
             except Exception as e:
                 last_error = e
+                discard_dead_output(path)
                 print(f"WARNING: {enc_name} + {kind} start failed: {e}")
                 continue
             time.sleep(0.5)
@@ -450,6 +459,7 @@ def start_cam_recording(cam, path_base, st):
                 except Exception:
                     pass
                 last_error = "encoder output produced no data"
+                discard_dead_output(path)
                 print(f"WARNING: {enc_name} + {kind} produced no data; trying next")
                 continue
             print(f"Recording {path} ({enc_name} + {kind})")
@@ -538,7 +548,21 @@ def video_recording_stop():
                     print(f"WARNING: stop encoder failed: {e}")
                 restore_still_config(cam)
             duration = time.time() - video_state["started"]
-            total = sum(os.path.getsize(f) for f in files if os.path.isfile(f))
+            total = 0
+            min_ok = max(500_000, int(100_000 * duration))
+            for f in files:
+                if not os.path.isfile(f):
+                    continue
+                size = os.path.getsize(f)
+                total += size
+                if size < min_ok:
+                    tail = os.path.basename(f).rsplit(".", 1)[0].rpartition("_cam")[2]
+                    if tail.isdigit():
+                        camera_errors[int(tail)] = (
+                            f"video suspect: {size // 1024} KB in {duration:.0f}s"
+                            " — encoder stalled")
+                        print(f"WARNING: {PI_ID} camera {int(tail)}: suspicious video "
+                              f"({size // 1024} KB in {duration:.1f}s)")
             batch = video_state["batch"]
             settings = video_state["settings"]
             video_state.update({"recording": False, "batch": None, "started": 0.0,
@@ -1099,6 +1123,8 @@ def sync_push():
                 if fname.endswith("_thumb.jpg"):
                     continue
                 if not fname.endswith(".jpg") and not fname.endswith(VIDEO_EXTENSIONS):
+                    continue
+                if os.path.getsize(os.path.join(batch_dir, fname)) == 0:
                     continue
                 if upload_capture_file(batch_dir, fname):
                     pushed += 1
