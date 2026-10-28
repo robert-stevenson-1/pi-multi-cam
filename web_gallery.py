@@ -2148,6 +2148,8 @@ function deleteBatch(btn) {
 
 let cameraAlertKeys = new Set();
 
+const LOW_DISK_MB = 500;
+
 function cameraErrorsOf(device) {
   return Array.isArray(device && device.camera_errors) ? device.camera_errors : [];
 }
@@ -2379,9 +2381,22 @@ function pollStatus() {
         observedVideoRecording = !!currentVideo.recording;
       }
       const primaryErrors = cameraErrorsOf(p);
+      const primaryLowDisk = typeof p.disk_free === 'number' && p.disk_free < LOW_DISK_MB;
       renderDevicePill(pPill,
-        'Primary (' + (p.cameras || 0) + ' cam' + (p.cameras === 1 ? '' : 's') + ')',
+        'Primary (' + (p.cameras || 0) + ' cam' + (p.cameras === 1 ? '' : 's') + ')'
+          + (primaryLowDisk ? ' · Disk Low (' + p.disk_free + ' MB)' : ''),
         primaryErrors);
+      if (primaryLowDisk && !primaryErrors.length) {
+        pPill.classList.remove('online');
+        pPill.classList.add('warn');
+        pPill.title = p.disk_free + ' MB free — uploads and recordings may fail';
+      }
+      if (primaryLowDisk && !window.diskWarned) {
+        window.diskWarned = true;
+        showToast('Primary disk low: ' + p.disk_free + ' MB free. Uploads and recordings may fail.', 'error', 9000);
+      } else if (!primaryLowDisk) {
+        window.diskWarned = false;
+      }
       videoState = p.video || null;
       applyCaps(p, d.secondaries || {});
       const capsPill = document.getElementById('capsPill');
@@ -2418,10 +2433,16 @@ function pollStatus() {
           const pill = document.createElement('span');
           if (v.up) {
             const errors = cameraErrorsOf(v);
+            const lowDisk = typeof v.disk_free === 'number' && v.disk_free < LOW_DISK_MB;
             cameraAlerts.push([k, errors]);
             renderDevicePill(pill,
-              k + ' (' + (v.cameras || 0) + ' cam' + (v.cameras === 1 ? '' : 's') + ')' + (v.recording ? ' · REC' : ''),
+              k + ' (' + (v.cameras || 0) + ' cam' + (v.cameras === 1 ? '' : 's') + ')'
+                + (v.recording ? ' · REC' : '') + (lowDisk ? ' · Disk Low' : ''),
               errors, false, v.addr || '');
+            if (lowDisk && !errors.length) {
+              pill.classList.remove('online');
+              pill.classList.add('warn');
+            }
           } else {
             renderDevicePill(pill, k + ' Down', [], true,
               (v.addr || '') + (v.error ? ' — ' + v.error : ''));
@@ -2767,6 +2788,7 @@ class Handler(SimpleHTTPRequestHandler):
                 entry["recording"] = bool(data.get("recording"))
                 entry["caps"] = data.get("caps")
                 entry["camera_errors"] = data.get("camera_errors", [])
+                entry["disk_free"] = data.get("disk_free")
             except Exception as e:
                 entry["error"] = str(e)
             result["secondaries"][pi_id] = entry
