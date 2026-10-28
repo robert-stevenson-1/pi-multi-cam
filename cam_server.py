@@ -156,6 +156,16 @@ capture_lock = threading.Lock()
 video_lock = threading.Lock()
 video_state = {"recording": False, "batch": None, "started": 0.0, "recs": [], "timer": None, "settings": None}
 
+MIN_FREE_MB = 500
+
+
+def disk_free_mb():
+    try:
+        return int(shutil.disk_usage(CAPTURES_DIR).free // 1048576)
+    except OSError as e:
+        print(f"WARNING: disk usage check failed: {e}")
+        return None
+
 VID_SIZES = {"1080": (1920, 1080), "720": (1280, 720)}
 VID_BITRATES = {"low": 4000000, "medium": 10000000, "high": 20000000}
 VIDEO_EXTENSIONS = (".mp4", ".h264")
@@ -463,6 +473,10 @@ def restore_still_config(cam):
 
 def video_recording_start(batch_dir, st, auto_stop=None):
     st = normalise_video_settings(st)
+    free = disk_free_mb()
+    if free is not None and free < MIN_FREE_MB:
+        print(f"{PI_ID}: video start refused, low disk ({free} MB free)")
+        return {"ok": False, "error": f"low disk: {free} MB free (need {MIN_FREE_MB} MB)"}
     os.makedirs(batch_dir, exist_ok=True)
     with capture_lock:
         with video_lock:
@@ -615,8 +629,17 @@ class Primary:
                 self.current_session = s["name"]
 
     def _save_sessions(self):
-        with open(self.session_path, "w") as f:
-            json.dump(self.sessions, f, indent=1)
+        tmp = self.session_path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(self.sessions, f, indent=1)
+            os.replace(tmp, self.session_path)
+        except OSError as e:
+            print(f"ERROR: saving {self.session_path} failed: {e}")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     def session_start(self, name, kind="image"):
         name = name.strip()
@@ -914,8 +937,19 @@ class Primary:
             else:
                 name = f"{pi_id}_cam{cam_idx}{ext}"
             path = os.path.join(batch_dir if batch else self.current_batch, name)
-        with open(path, "wb") as f:
-            f.write(data)
+        free = disk_free_mb()
+        if free is not None and free < MIN_FREE_MB:
+            return {"ok": False, "error": f"low disk: {free} MB free (need {MIN_FREE_MB} MB)"}
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            print(f"ERROR: upload write failed for {name}: {e}")
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return {"ok": False, "error": f"upload write failed: {e}"}
         if kind == "video":
             video_upload_thumb(path)
         else:
@@ -1138,6 +1172,7 @@ class Handler(BaseHTTPRequestHandler):
                     "camera_errors": camera_failures,
                     "caps": caps_payload(),
                     "still_size": list(still_state["size"]) if still_state["size"] else "full",
+                    "disk_free": disk_free_mb(),
                     "session": primary.current_session,
                     "session_kind": skind,
                     "video": video,
@@ -1179,6 +1214,7 @@ class Handler(BaseHTTPRequestHandler):
                 "camera_errors": camera_failures,
                 "caps": caps_payload(),
                 "still_size": list(still_state["size"]) if still_state["size"] else "full",
+                "disk_free": disk_free_mb(),
                 "recording": recording,
             })
         elif path == "/sync":
@@ -1228,8 +1264,11 @@ class Handler(BaseHTTPRequestHandler):
                 if batch and not all(c.isalnum() or c == "_" for c in batch):
                     self._send_json(400, {"error": "invalid batch"})
                     return
-                primary.handle_upload(pi_id, cam_idx, data, batch, kind, fname)
-                self._send_json(200, {"ok": True})
+                res = primary.handle_upload(pi_id, cam_idx, data, batch, kind, fname)
+                if res and not res.get("ok"):
+                    self._send_json(507, res)
+                else:
+                    self._send_json(200, {"ok": True})
             elif parsed.path == "/remote-capture":
                 body = primary.do_capture(remote=True)
                 response = {"ok": body.get("ok", False)}
